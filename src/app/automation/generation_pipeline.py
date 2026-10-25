@@ -39,7 +39,6 @@ def build_payload(
     styles_cfg: TypographyStylesConfig,
     output_dir: Union[Path, str],
     binding: Union[BindingMethod, str] = "saddle_stitch",
-    estimated_page_count: Optional[int] = None,
 ) -> Path:
     """Build and write the JSON payload for generate_booklet.jsx.
 
@@ -48,13 +47,16 @@ def build_payload(
     has been tampered with or modified without using with_user_edit(),
     TextIntegrityError is raised immediately.
 
+    The binding method is passed to JSX so that imposition target count
+    can be calculated dynamically from the actual InDesign page count
+    after content injection.
+
     Args:
         document: The complete BookletDocument containing pages, blocks, and tables.
         geometry: PageGeometry configuration (A4, facing pages, margins, etc.).
         styles_cfg: TypographyStylesConfig (fonts, font sizes, leading, direction).
         output_dir: Directory where the payload JSON, .indd, and .pdf will be stored.
         binding: Binding method used to calculate imposed signature multiples.
-        estimated_page_count: Pre-layout estimated page count (defaults to len(document.pages)).
 
     Returns:
         Path to the written payload JSON file.
@@ -75,10 +77,8 @@ def build_payload(
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    # ── 2. Imposed Target Page Count ──────────────────────────────────
+    # ── 2. Binding Configuration & Output Paths ───────────────────────
     binding_str = str(binding)
-    base_page_est = estimated_page_count or max(1, len(document.pages))
-    target_page_count = imposed_page_count(base_page_est, binding_str)
 
     doc_id = document.doc_id or "booklet"
     payload_file = out_path / f"{doc_id}_payload.json"
@@ -144,7 +144,6 @@ def build_payload(
         "output_pdf": str(pdf_file.resolve()),
         "result_file_path": str(result_file.resolve()),
         "binding": binding_str,
-        "target_page_count": target_page_count,
         "geometry": geometry.to_jsx_payload(),
         "styles": styles_cfg.model_dump(),
         "blocks": blocks_list,
@@ -194,7 +193,6 @@ def generate_booklet(
     output_dir: Union[Path, str],
     supervisor: Optional[COMSupervisor] = None,
     binding: Union[BindingMethod, str] = "saddle_stitch",
-    estimated_page_count: Optional[int] = None,
     preflight_output_path: Optional[str] = None,
 ) -> Any:
     """End-to-end booklet generation entrypoint.
@@ -209,7 +207,6 @@ def generate_booklet(
         output_dir: Output directory for JSON, INDD, and PDF.
         supervisor: Optional COMSupervisor instance.
         binding: Binding method for page imposition.
-        estimated_page_count: Pre-layout estimate.
         preflight_output_path: Optional post-generation preflight path.
 
     Returns:
@@ -221,7 +218,6 @@ def generate_booklet(
         styles_cfg=styles_cfg,
         output_dir=output_dir,
         binding=binding,
-        estimated_page_count=estimated_page_count,
     )
     return submit_generate_booklet_job(
         payload_path=payload_path,

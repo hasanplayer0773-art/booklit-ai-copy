@@ -214,7 +214,10 @@ def run_smoke_test(output_dir: Path, build_only: bool = False) -> int:
         )
         print("[✓] InDesign generation completed successfully!")
         if isinstance(result, dict):
-            print(f"    - Page Count: {result.get('page_count')}")
+            print(f"    - Actual Content Pages: {result.get('actual_page_count')}")
+            print(f"    - Imposed Target Pages: {result.get('imposed_page_count')}")
+            print(f"    - Final Document Pages: {result.get('page_count')}")
+            print(f"    - World-Ready Composer: {'✓ OK' if result.get('composer_ok') else '✗ FAIL'}")
             print(f"    - Output INDD: {result.get('output_indd')}")
             print(f"    - Output PDF:  {result.get('output_pdf')}")
             warnings = result.get("warnings", [])

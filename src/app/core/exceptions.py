@@ -93,6 +93,21 @@ class StyleMappingError(BookletError):
     """
 
 
+class StyleConfigError(BookletError):
+    """Raised when a non-cosmetic style property (direction, composer, font) fails to apply.
+
+    Plan STEP-1.1/2.3 forbids silent failure or silent degradation for
+    paragraphDirection, composer, and appliedFont.
+    """
+
+
+class MissingFontError(BookletError):
+    """Raised when a required font is not installed or available in InDesign.
+
+    Plan STEP-1.1/2.3 forbids silent font substitution (e.g. falling back to Arial).
+    """
+
+
 class RTLTableUnsupportedError(BookletError):
     """Raised when the InDesign installation does not support RTL tables.
 

@@ -35,7 +35,9 @@ from app.core.exceptions import (
     ContentExceedsEstimateError,
     InvalidBodyFrameGeometryError,
     MarginConfigError,
+    MissingFontError,
     RTLTableUnsupportedError,
+    StyleConfigError,
     StyleMappingError,
     TextIntegrityError,
 )
@@ -173,8 +175,9 @@ class TestPayloadBuilding:
 
         assert data["doc_id"] == "doc-math-101"
         assert data["binding"] == "saddle_stitch"
-        # 3 pages saddle stitched imposes to multiple of 4
-        assert data["target_page_count"] == 4
+        # STEP-7.1b: target_page_count is no longer derived from source document;
+        # computed dynamically inside JSX from actual post-injection page count.
+        assert "target_page_count" not in data
         assert "geometry" in data
         assert data["geometry"]["margins"]["inside_spine_mm"] == 22.0
         assert data["geometry"]["numbering_style"] == "arabic_indic"
@@ -337,6 +340,12 @@ class TestCOMJobRequestPicklability:
 class TestSupervisorExecutionAndErrors:
     def test_raise_typed_error_mapping(self):
         """_raise_typed_error correctly maps error substrings to typed exceptions."""
+        with pytest.raises(MissingFontError):
+            _raise_typed_error("MissingFontError: required font 'Tajawal' is not installed")
+
+        with pytest.raises(StyleConfigError):
+            _raise_typed_error("StyleConfigError: BodyArabicStyle.composer failed: cannot assign")
+
         with pytest.raises(TextIntegrityError):
             _raise_typed_error("TextIntegrityError: hash mismatch")
 
@@ -485,5 +494,23 @@ class TestJSXScriptStaticContract:
         assert "MinistryQuestionStyle" in content
         assert "MathFormulaStyle" in content
 
-        # 6. Result JSON writing
+        # 6. STEP-7.1b Review Fixes
+        # RulerOrigin page relative
+        assert "doc.viewPreferences.rulerOrigin = RulerOrigin.PAGE_ORIGIN" in content
+        # World-Ready Composer
+        assert "Adobe World-Ready Paragraph Composer" in content
+        # Non-silent failures: MissingFontError & StyleConfigError
+        assert "MissingFontError" in content
+        assert "StyleConfigError" in content
+        # requireMarginField with no fallbacks
+        assert "requireMarginField(geometry.margins, \"inside_spine_mm\")" in content
+        assert "requireMarginField(geometry.margins, \"outside_mm\")" in content
+        # Dynamic imposition from actual page count & unified multiples
+        assert "IMPOSITION_MULTIPLE_MAP" in content
+        assert "doc.close(SaveOptions.NO)" in content
+        assert "composer_ok" in content
+        assert "actual_page_count" in content
+        assert "imposed_page_count" in content
+
+        # 7. Result JSON writing
         assert "writeResultToFile" in content

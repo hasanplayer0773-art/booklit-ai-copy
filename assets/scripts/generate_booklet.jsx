@@ -1,6 +1,6 @@
 /*
     generate_booklet.jsx — Real Booklet Generation Script
-    STEP-7.1
+    STEP-7.1 / STEP-7.1b
 
     Converts a BookletDocument JSON payload (blocks, tables, PageGeometry,
     styles config) into a real InDesign document and PDF.
@@ -10,19 +10,26 @@
     2. Read payload from file
     3. Set UserInteractionLevels.NEVER_INTERACT (prevent modal deadlock)
     4. Create document from PageGeometry (facing pages, page size, bleeds)
-    5. Programmatically create the 8 paragraph styles from BLOCK_STYLE_MAP
-       (plus helpers) if missing (v1 does not require a pre-existing .idml)
-    6. Set up Master Spread ("Booklet_Master") with header/footer ribbons
+    5. Set doc.viewPreferences.rulerOrigin = RulerOrigin.PAGE_ORIGIN
+       (page-relative frame coordinates across left/right pages)
+    6. Programmatically create paragraph styles from BLOCK_STYLE_MAP with
+       strict checks:
+       - Adobe World-Ready Paragraph Composer required for all Arabic styles (throws on failure)
+       - MissingFontError thrown if font is not found (no silent Arial substitution)
+       - StyleConfigError thrown on direction/composer/font failure
+    7. Set up Master Spread ("Booklet_Master") with header/footer ribbons
        and labeled body frames ("Booklet_Body_Story")
-    7. Override first page body frame and thread story
-    8. Inject blocks atomically with insert-style-release:
+    8. Override first page body frame and thread story
+    9. Inject blocks atomically with insert-style-release:
        - injectMathFormulaBlock (enforced LTR)
        - injectRTLTable (proportional columns, alternating rows, RTL direction)
        - resolveAndApplyStyle (maps block_type to style, applies ministry callout)
        - ensureFrameCapacity (MAX_PAGES_SAFETY = 500, side-matching body frame override)
-    9. Call addBlankFillerPages to meet signature imposition requirement
-    10. Save .indd and export high-quality PDF
-    11. Write result JSON (page_count, warnings, status)
+    10. Compute imposed target from ACTUAL doc.pages.count() after injection
+        (using IMPOSITION_MULTIPLE unified with pricing_engine.py) and call addBlankFillerPages
+    11. Save .indd and export high-quality PDF
+    12. Close document via doc.close(SaveOptions.NO) in finally block
+    13. Write result JSON (actual_page_count, imposed_page_count, page_count, composer_ok, warnings)
 */
 
 #include "lib/json2.jsx"
@@ -53,6 +60,13 @@ if (typeof setupMasterSpread === "undefined") {
         $.evalFile(_ms);
     }
 }
+if (typeof requireMarginField === "undefined") {
+    var _scriptDir = File($.fileName).parent;
+    var _msMargin = File(_scriptDir + "/build_master_spread.jsx");
+    if (_msMargin.exists) {
+        $.evalFile(_msMargin);
+    }
+}
 if (typeof injectMathFormulaBlock === "undefined") {
     var _scriptDir = File($.fileName).parent;
     var _itm = File(_scriptDir + "/inject_tables_and_math.jsx");
@@ -66,6 +80,24 @@ if (typeof resolveAndApplyStyle === "undefined") {
     if (_aqc.exists) {
         $.evalFile(_aqc);
     }
+}
+
+
+// ─── Imposition Multiples (Unified with pricing_engine.IMPOSITION_MULTIPLE) ──
+
+var IMPOSITION_MULTIPLE_MAP = {
+    "saddle_stitch": 4,
+    "perfect_bound": 1,
+    "spiral":        1,
+    "perfect_bind":  2,
+    "wire":          2
+};
+
+function getImpositionMultiple(binding) {
+    if (IMPOSITION_MULTIPLE_MAP.hasOwnProperty(binding)) {
+        return IMPOSITION_MULTIPLE_MAP[binding];
+    }
+    throw new Error("InvalidBindingError: unknown binding method '" + binding + "'");
 }
 
 
@@ -161,6 +193,12 @@ function getOrCreateColor(doc, colorName, rgbValues) {
 
 // ─── Style Definition Helpers ─────────────────────────────────────────
 
+/**
+ * Create or retrieve a paragraph style with strict error handling.
+ *
+ * Only swallows errors for purely cosmetic properties (spaceBefore, spaceAfter, etc.).
+ * Critical properties (paragraphDirection, composer, appliedFont) MUST throw StyleConfigError.
+ */
 function getOrCreateParagraphStyle(doc, styleName, properties) {
     var style = doc.paragraphStyles.itemByName(styleName);
     if (!style.isValid) {
@@ -172,7 +210,14 @@ function getOrCreateParagraphStyle(doc, styleName, properties) {
                 try {
                     style[prop] = properties[prop];
                 } catch (eProp) {
-                    // Ignore unsupported properties on specific InDesign builds
+                    // Critical non-cosmetic properties MUST NOT fail silently (STEP-7.1b)
+                    if (prop === "paragraphDirection" || prop === "composer" || prop === "appliedFont") {
+                        throw new Error(
+                            "StyleConfigError: " + styleName + "." + prop +
+                            " failed: " + eProp.message
+                        );
+                    }
+                    // Swallow only purely cosmetic properties (spaceBefore, spaceAfter, etc.)
                 }
             }
         }
@@ -180,11 +225,43 @@ function getOrCreateParagraphStyle(doc, styleName, properties) {
     return style;
 }
 
+/**
+ * Apply font to paragraph style without silent substitution.
+ *
+ * Plan STEP-1.1 / STEP-2.3 explicitly forbids silent font fallback (e.g. falling back to Arial).
+ * If the font is missing from InDesign, throws MissingFontError immediately.
+ */
+function applyFontSafe(style, fontName) {
+    if (!fontName) {
+        throw new Error(
+            "MissingFontError: fontName is undefined or empty for style '" + style.name + "'."
+        );
+    }
+    try {
+        var f = app.fonts.itemByName(fontName);
+        if (!f.isValid) {
+            throw new Error("Font not found in app.fonts");
+        }
+        style.appliedFont = f;
+    } catch (e1) {
+        try {
+            style.appliedFont = fontName;
+        } catch (e2) {
+            throw new Error(
+                "MissingFontError: required font '" + fontName +
+                "' is not installed or available in InDesign for style '" +
+                style.name + "': " + e2.message
+            );
+        }
+    }
+}
+
 
 /**
  * Create or ensure all 8 BLOCK_STYLE_MAP styles (plus supporting styles) exist.
  *
- * Configures Arabic fonts (with fallbacks), RTL paragraph direction,
+ * Configures Arabic fonts (fails fast if missing), RTL paragraph direction,
+ * Adobe World-Ready Paragraph Composer on all Arabic/RTL styles,
  * and strict LTR direction for math/chemistry/latin styles.
  */
 function ensureAllStyles(doc, stylesCfg) {
@@ -193,61 +270,48 @@ function ensureAllStyles(doc, stylesCfg) {
 
     var rtlDirection = ParagraphDirectionOptions.RIGHT_TO_LEFT_DIRECTION;
     var ltrDirection = ParagraphDirectionOptions.LEFT_TO_RIGHT_DIRECTION;
+    var wrComposer = "Adobe World-Ready Paragraph Composer";
 
-    // Helper to safely assign font
-    function applyFontSafe(style, fontName, fallback) {
-        try {
-            style.appliedFont = app.fonts.itemByName(fontName);
-        } catch (e1) {
-            try {
-                style.appliedFont = fontName;
-            } catch (e2) {
-                if (fallback) {
-                    try {
-                        style.appliedFont = fallback;
-                    } catch (e3) {}
-                }
-            }
-        }
-    }
-
-    // 1. ChapterHeaderStyle
+    // 1. ChapterHeaderStyle (Arabic/RTL)
     var chStyle = getOrCreateParagraphStyle(doc, "ChapterHeaderStyle", {
         pointSize: 16.0,
         leading: 22.0,
         paragraphDirection: rtlDirection,
+        composer: wrComposer,
         spaceBefore: 12.0,
         spaceAfter: 8.0
     });
-    applyFontSafe(chStyle, bodyFont, "Arial");
+    applyFontSafe(chStyle, bodyFont);
 
-    // 2. BodyArabicStyle
+    // 2. BodyArabicStyle (Arabic/RTL)
     var baStyle = getOrCreateParagraphStyle(doc, "BodyArabicStyle", {
         pointSize: stylesCfg.body_size_pt || 11.5,
         leading: stylesCfg.body_leading_pt || 17.0,
         paragraphDirection: rtlDirection,
+        composer: wrComposer,
         spaceAfter: 6.0
     });
-    applyFontSafe(baStyle, bodyFont, "Traditional Arabic");
+    applyFontSafe(baStyle, bodyFont);
 
-    // 3. BodyLatinStyle
+    // 3. BodyLatinStyle (Latin/LTR)
     var blStyle = getOrCreateParagraphStyle(doc, "BodyLatinStyle", {
         pointSize: 11.0,
         leading: 16.0,
         paragraphDirection: ltrDirection,
         spaceAfter: 6.0
     });
-    applyFontSafe(blStyle, "Arial", "Times New Roman");
+    applyFontSafe(blStyle, "Arial");
 
-    // 4. MinistryQuestionStyle
+    // 4. MinistryQuestionStyle (Arabic/RTL)
     var mqStyle = getOrCreateParagraphStyle(doc, "MinistryQuestionStyle", {
         pointSize: 12.0,
         leading: 18.0,
         paragraphDirection: rtlDirection,
+        composer: wrComposer,
         spaceBefore: 8.0,
         spaceAfter: 8.0
     });
-    applyFontSafe(mqStyle, bodyFont, "Traditional Arabic");
+    applyFontSafe(mqStyle, bodyFont);
 
     // 5. MathFormulaStyle (Forced LTR)
     var mfStyle = getOrCreateParagraphStyle(doc, "MathFormulaStyle", {
@@ -257,7 +321,7 @@ function ensureAllStyles(doc, stylesCfg) {
         spaceBefore: 6.0,
         spaceAfter: 6.0
     });
-    applyFontSafe(mfStyle, mathFont, "Times New Roman");
+    applyFontSafe(mfStyle, mathFont);
 
     // 6. ChemistryFormulaStyle (Forced LTR)
     var cfStyle = getOrCreateParagraphStyle(doc, "ChemistryFormulaStyle", {
@@ -267,27 +331,29 @@ function ensureAllStyles(doc, stylesCfg) {
         spaceBefore: 6.0,
         spaceAfter: 6.0
     });
-    applyFontSafe(cfStyle, mathFont, "Arial");
+    applyFontSafe(cfStyle, mathFont);
 
-    // 7. ImagePlaceholderStyle
+    // 7. ImagePlaceholderStyle (Arabic/RTL)
     var ipStyle = getOrCreateParagraphStyle(doc, "ImagePlaceholderStyle", {
         pointSize: 10.0,
         leading: 14.0,
         paragraphDirection: rtlDirection,
+        composer: wrComposer,
         spaceBefore: 4.0,
         spaceAfter: 4.0
     });
-    applyFontSafe(ipStyle, bodyFont, "Arial");
+    applyFontSafe(ipStyle, bodyFont);
 
-    // 8. ListItemStyle
+    // 8. ListItemStyle (Arabic/RTL)
     var liStyle = getOrCreateParagraphStyle(doc, "ListItemStyle", {
         pointSize: 11.5,
         leading: 17.0,
         paragraphDirection: rtlDirection,
+        composer: wrComposer,
         leftIndent: 12.0,
         spaceAfter: 4.0
     });
-    applyFontSafe(liStyle, bodyFont, "Traditional Arabic");
+    applyFontSafe(liStyle, bodyFont);
 
     // 9. LegacyEquationPlaceholderStyle
     var legStyle = getOrCreateParagraphStyle(doc, "LegacyEquationPlaceholderStyle", {
@@ -297,36 +363,40 @@ function ensureAllStyles(doc, stylesCfg) {
         spaceBefore: 4.0,
         spaceAfter: 4.0
     });
-    applyFontSafe(legStyle, "Courier New", "Arial");
+    applyFontSafe(legStyle, "Courier New");
 
-    // Supporting styles for headers, footers, tables
+    // Supporting styles for headers, footers, tables (Arabic/RTL)
     var rhStyle = getOrCreateParagraphStyle(doc, "RunningHeaderStyle", {
         pointSize: 9.0,
         leading: 12.0,
-        paragraphDirection: rtlDirection
+        paragraphDirection: rtlDirection,
+        composer: wrComposer
     });
-    applyFontSafe(rhStyle, bodyFont, "Arial");
+    applyFontSafe(rhStyle, bodyFont);
 
     var rfStyle = getOrCreateParagraphStyle(doc, "RunningFooterStyle", {
         pointSize: 9.0,
         leading: 12.0,
-        paragraphDirection: rtlDirection
+        paragraphDirection: rtlDirection,
+        composer: wrComposer
     });
-    applyFontSafe(rfStyle, bodyFont, "Arial");
+    applyFontSafe(rfStyle, bodyFont);
 
     var thStyle = getOrCreateParagraphStyle(doc, "TableHeaderStyle", {
         pointSize: stylesCfg.table_header_size_pt || 10.5,
         leading: 14.0,
-        paragraphDirection: rtlDirection
+        paragraphDirection: rtlDirection,
+        composer: wrComposer
     });
-    applyFontSafe(thStyle, bodyFont, "Arial");
+    applyFontSafe(thStyle, bodyFont);
 
     var tcStyle = getOrCreateParagraphStyle(doc, "TableCellStyle", {
         pointSize: stylesCfg.table_cell_size_pt || 10.0,
         leading: 13.0,
-        paragraphDirection: rtlDirection
+        paragraphDirection: rtlDirection,
+        composer: wrComposer
     });
-    applyFontSafe(tcStyle, bodyFont, "Traditional Arabic");
+    applyFontSafe(tcStyle, bodyFont);
 
     return {
         titleStyle: chStyle,
@@ -386,6 +456,13 @@ function generateBookletMain() {
         doc.viewPreferences.horizontalMeasurementUnits = MeasurementUnits.POINTS;
         doc.viewPreferences.verticalMeasurementUnits = MeasurementUnits.POINTS;
 
+        // Set rulerOrigin to RulerOrigin.PAGE_ORIGIN right after creating the document
+        // and BEFORE setupMasterSpread. By default in facing-page spreads, InDesign's ruler origin
+        // is SPREAD_ORIGIN (zero at the left page's top-left corner), which causes coordinate bounds
+        // on right-hand pages to be offset horizontally by the page width. PAGE_ORIGIN ensures
+        // [y0, x0, y1, x1] bounds are strictly page-relative on both left and right master pages.
+        doc.viewPreferences.rulerOrigin = RulerOrigin.PAGE_ORIGIN;
+
         with (doc.documentPreferences) {
             pageHeight = geometry.height_pt + "pt";
             pageWidth = geometry.width_pt + "pt";
@@ -409,7 +486,7 @@ function generateBookletMain() {
             paperColor: doc.swatches.itemByName("Paper")
         };
 
-        // ── 6. Create Paragraph Styles ──────────────────────────────────
+        // ── 6. Create Paragraph Styles (World-Ready Composer + Fonts) ───
         var styles = ensureAllStyles(doc, stylesCfg);
 
         // ── 7. Configure Master Spread ──────────────────────────────────
@@ -425,14 +502,17 @@ function generateBookletMain() {
         var currentFrame = masterBodyFrame.override(firstPage);
         var story = currentFrame.parentStory;
 
-        // Calculate available body frame width for tables
+        // Calculate available body frame width for tables using requireMarginField (no fallbacks)
         var pBounds = firstPage.bounds;
         var pWidth = pBounds[3] - pBounds[1];
-        var mInside = (geometry.margins.inside_spine_mm || 20.0) * 2.83465;
-        var mOutside = (geometry.margins.outside_mm || 15.0) * 2.83465;
+        var mInside = requireMarginField(geometry.margins, "inside_spine_mm") * 2.83465;
+        var mOutside = requireMarginField(geometry.margins, "outside_mm") * 2.83465;
         var bodyWidthPt = pWidth - mInside - mOutside;
         if (bodyWidthPt <= 0) {
-            bodyWidthPt = 400.0;
+            throw new Error(
+                "InvalidBodyFrameGeometryError: computed body frame width is zero or negative (" +
+                bodyWidthPt + "pt) — inside_spine_mm + outside_mm leaves no usable area."
+            );
         }
 
         // ── 9. Inject Content Blocks & Tables ───────────────────────────
@@ -498,28 +578,13 @@ function generateBookletMain() {
             story = currentFrame.parentStory;
         }
 
-        // ── 10. Filler Page Imposition Sync ─────────────────────────────
-        var currentCount = doc.pages.count();
-        var targetCount = payload.target_page_count;
+        // ── 10. Dynamic Imposition from ACTUAL InDesign Page Count ──────
+        var actualPageCount = doc.pages.count();
         var bindingMethod = payload.binding || "saddle_stitch";
-        var multiple = (bindingMethod === "saddle_stitch") ? 4 : ((bindingMethod === "perfect_bind" || bindingMethod === "wire") ? 2 : 1);
+        var multiple = getImpositionMultiple(bindingMethod);
+        var imposedPageCount = Math.ceil(actualPageCount / multiple) * multiple;
 
-        if (!targetCount) {
-            targetCount = Math.ceil(currentCount / multiple) * multiple;
-        }
-
-        try {
-            addBlankFillerPages(doc, targetCount, "Booklet_Master");
-        } catch (eFiller) {
-            if (eFiller.message && eFiller.message.indexOf("ContentExceedsEstimateError") !== -1) {
-                warnings.push(eFiller.message);
-                var actualCount = doc.pages.count();
-                var newTarget = Math.ceil(actualCount / multiple) * multiple;
-                addBlankFillerPages(doc, newTarget, "Booklet_Master");
-            } else {
-                throw eFiller;
-            }
-        }
+        addBlankFillerPages(doc, imposedPageCount, "Booklet_Master");
 
         // ── 11. Save .INDD and Export PDF ────────────────────────────────
         var inddPath = payload.output_indd || (payload.output_dir + "/" + (payload.doc_id || "booklet") + ".indd");
@@ -551,6 +616,9 @@ function generateBookletMain() {
         var resultData = {
             status: "ok",
             page_count: doc.pages.count(),
+            actual_page_count: actualPageCount,
+            imposed_page_count: imposedPageCount,
+            composer_ok: true,
             output_indd: inddPath,
             output_pdf: pdfPath,
             warnings: warnings
@@ -567,6 +635,9 @@ function generateBookletMain() {
             status: "error",
             error: err.message || String(err),
             page_count: (doc && doc.isValid) ? doc.pages.count() : 0,
+            actual_page_count: (doc && doc.isValid) ? doc.pages.count() : 0,
+            imposed_page_count: 0,
+            composer_ok: false,
             warnings: warnings
         };
         if (resultPath) {
@@ -575,6 +646,15 @@ function generateBookletMain() {
             } catch (eWrite) {}
         }
         throw err;
+    } finally {
+        // Close document to avoid accumulating open documents across batch jobs
+        if (doc !== null && doc.isValid) {
+            try {
+                doc.close(SaveOptions.NO);
+            } catch (eClose) {
+                // Ignore close error if already dismissed or closed
+            }
+        }
     }
 }
 

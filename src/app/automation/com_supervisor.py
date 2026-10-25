@@ -382,13 +382,19 @@ def _raise_typed_error(error_msg: str, original_exc: Optional[Exception] = None)
         ContentExceedsEstimateError,
         InvalidBodyFrameGeometryError,
         MarginConfigError,
+        MissingFontError,
         RTLTableUnsupportedError,
+        StyleConfigError,
         StyleMappingError,
         TextIntegrityError,
     )
 
     msg_lower = error_msg.lower()
-    if "textintegrityerror" in msg_lower:
+    if "missingfonterror" in msg_lower:
+        raise MissingFontError(error_msg) from original_exc
+    elif "styleconfigerror" in msg_lower:
+        raise StyleConfigError(error_msg) from original_exc
+    elif "textintegrityerror" in msg_lower:
         raise TextIntegrityError(error_msg) from original_exc
     elif "stylemappingerror" in msg_lower:
         raise StyleMappingError(error_msg) from original_exc
