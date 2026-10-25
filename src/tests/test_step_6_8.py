@@ -310,18 +310,21 @@ def simulate_setup_master_spread(
         m_bottom = doc_cfg["margins"]["bottom_mm"] * 2.83465
         m_top = doc_cfg["margins"]["top_mm"] * 2.83465
 
-        # 1. Header ribbon
+        # 1. Header ribbon (SECTION_MARKER removed per STEP-7.1e)
         h_frame = m_page.textFrames.add({"geometricBounds": [m_top - 18, left, m_top - 4, right]})
-        h_frame.insertionPoints[0].contents = MockSpecialCharacters.SECTION_MARKER
-        h_frame.insertionPoints[-1].contents = "   |   Running Header"
+        h_frame.insertionPoints[0].contents = "Running Header"
 
         # 2. Header line
         m_page.graphicLines.add()
 
-        # 3. Footer ribbon with AUTO_PAGE_NUMBER
+        # 3. Footer ribbon with AUTO_PAGE_NUMBER (STEP-7.1e: configurable footer_text, default empty)
         f_frame = m_page.textFrames.add({"geometricBounds": [p_height - m_bottom + 4, left, p_height - m_bottom + 18, right]})
-        f_frame.insertionPoints[0].contents = "Booklet_AI   \u2022   \u0635\u0641\u062D\u0629 "
-        f_frame.insertionPoints[-1].contents = MockSpecialCharacters.AUTO_PAGE_NUMBER
+        footer_text = doc_cfg.get("footer_text") or (doc_cfg.get("geometry", {}).get("footer_text") if isinstance(doc_cfg.get("geometry"), dict) else "") or ""
+        if footer_text:
+            f_frame.insertionPoints[0].contents = footer_text + "   |   "
+            f_frame.insertionPoints[-1].contents = MockSpecialCharacters.AUTO_PAGE_NUMBER
+        else:
+            f_frame.insertionPoints[0].contents = MockSpecialCharacters.AUTO_PAGE_NUMBER
 
         # 3.1 Digit Shaping for AUTO_PAGE_NUMBER (STEP-6.8)
         num_style = doc_cfg.get("numbering_style", "arabic_indic")

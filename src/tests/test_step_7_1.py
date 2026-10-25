@@ -614,8 +614,27 @@ class TestJSXScriptStaticContract:
         assert "doc.masterSpreads.itemByName" not in content
         assert "getBookletMaster(doc)" in content
 
+        # 9. STEP-7.1e Visual Fix Contracts
+        # 9a. GreekMathChar & GREP styles
+        assert "GreekMathChar" in content
+        assert "nestedGrepStyles.add" in content
+        assert r"[\\x{0370}-\\x{03FF}\\x{2200}-\\x{22FF}\\x{221A}]" in content
+        # 9b. Table width from geometricBounds
+        assert "getFrameUsableWidth" in content
+        assert "currentTableWidth = getFrameUsableWidth(currentFrame)" in content
+        # 9c. Explicit RTL page binding
+        assert "PageBindingOptions.RIGHT_TO_LEFT_BINDING" in content
+        assert "doc.documentPreferences.pageBinding = PageBindingOptions.RIGHT_TO_LEFT_BINDING" in content
+        # 9d. Margin preferences matching body frame
+        assert "firstPage.marginPreferences" in content
+        assert "newPage.marginPreferences" in content
+        # 9e. Result JSON page diagnostics
+        assert "pages: pageDiagnostics" in content
+        assert "page_number" in content
+        assert "table_width" in content
+
     def test_build_master_spread_jsx_contracts(self):
-        """Verify build_master_spread.jsx implements STEP-7.1d baseName and getBookletMaster rules."""
+        """Verify build_master_spread.jsx implements STEP-7.1d and STEP-7.1e rules."""
         ms_path = _find_jsx_script("build_master_spread.jsx")
         assert ms_path.exists()
         content = ms_path.read_text(encoding="utf-8")
@@ -632,3 +651,87 @@ class TestJSXScriptStaticContract:
         # 3. No itemByName for Booklet_Master anywhere
         assert 'itemByName("Booklet_Master")' not in content
         assert "doc.masterSpreads.itemByName" not in content
+
+        # 4. STEP-7.1e Header/Footer & Margins
+        assert "SpecialCharacters.SECTION_MARKER" not in content
+        assert "Booklet_AI   \\u2022" not in content
+        assert "footer_text" in content
+        assert "mPage.marginPreferences" in content
+        assert "newPage.marginPreferences" in content
+
+    def test_inject_tables_and_math_step_7_1e_contracts(self):
+        """Verify inject_tables_and_math.jsx implements STEP-7.1e BiDi and edge-to-edge rules."""
+        itm_path = _find_jsx_script("inject_tables_and_math.jsx")
+        assert itm_path.exists()
+        content = itm_path.read_text(encoding="utf-8")
+
+        # BiDi check: no Arabic characters regex
+        assert r"[\u0600-\u06FF]" in content
+        assert "LEFT_TO_RIGHT" in content
+        assert "CENTER_ALIGN" in content
+        assert "Known limitation: Cells that mix Arabic and Latin/math keep RTL" in content
+
+        # No Unicode control characters inserted
+        assert "\u200e" not in content
+        assert "\u200f" not in content
+        assert r"\u200E" not in content
+        assert r"\u200F" not in content
+
+        # Edge-to-edge anchoring: clear paragraph indents
+        assert "parentPara.leftIndent = 0" in content
+        assert "parentPara.rightIndent = 0" in content
+
+    def test_manual_smoke_test_script_prints_diagnostics(self):
+        """Verify tools/manual_smoke_test.py prints page layout diagnostics."""
+        project_root = Path(__file__).resolve().parent.parent.parent
+        test_tool_path = project_root / "tools" / "manual_smoke_test.py"
+        assert test_tool_path.exists()
+        tool_content = test_tool_path.read_text(encoding="utf-8")
+
+        assert "Page Layout Diagnostics" in tool_content
+        assert "page_number" in tool_content
+        assert "table_width" in tool_content
+        assert "bounds" in tool_content
+
+    def test_build_payload_serializes_footer_text(self, tmp_path):
+        """Verify build_payload serializes configurable footer_text field."""
+        from app.automation.generation_pipeline import build_payload
+        from app.automation.geometry import PageGeometry
+        from app.automation.styles_schema import TypographyStylesConfig
+        from app.core.models import BookletDocument, ContentBlock, PageData
+        from app.core.text_integrity import compute_canonical_hash
+
+        text = "مرحبا بالعالم"
+        blk = ContentBlock(
+            block_id="b1",
+            block_type="arabic_text",
+            raw_content=text,
+            content_hash=compute_canonical_hash(text),
+        )
+        page = PageData(
+            page_number=1,
+            width=595.28,
+            height=841.89,
+            footer_text="الفصل الأول",
+            content_blocks=[blk],
+        )
+        doc = BookletDocument(
+            doc_id="test_footer_doc",
+            file_path="C:/dummy/test.docx",
+            file_type="docx",
+            pages=[page],
+        )
+        geom = PageGeometry()
+        styles = TypographyStylesConfig()
+
+        # 1. Inherited from page
+        p_path1 = build_payload(doc, geom, styles, tmp_path)
+        payload1 = json.loads(p_path1.read_text(encoding="utf-8"))
+        assert payload1["footer_text"] == "الفصل الأول"
+        assert payload1["geometry"]["footer_text"] == "الفصل الأول"
+
+        # 2. Explicitly passed
+        p_path2 = build_payload(doc, geom, styles, tmp_path, footer_text="مخصص")
+        payload2 = json.loads(p_path2.read_text(encoding="utf-8"))
+        assert payload2["footer_text"] == "مخصص"
+        assert payload2["geometry"]["footer_text"] == "مخصص"

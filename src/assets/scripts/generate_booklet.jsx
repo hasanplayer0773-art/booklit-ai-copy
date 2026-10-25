@@ -157,7 +157,37 @@ function ensureFrameCapacity(doc, currentFrame, masterName) {
         var masterBodyFrame = findMasterFrameByLabelOnSide(
             newPage.appliedMaster, "Booklet_Body_Story", newPage.side
         );
+
+        // Apply marginPreferences matching body frame (STEP-7.1e)
+        try {
+            var mgb = masterBodyFrame.geometricBounds;
+            var npBounds = newPage.bounds;
+            var npWidth = npBounds[3] - npBounds[1];
+            var npHeight = npBounds[2] - npBounds[0];
+            var npTop = mgb[0];
+            var npLeft = mgb[1];
+            var npBottom = npHeight - mgb[2];
+            var npRight = npWidth - mgb[3];
+            try {
+                newPage.marginPreferences.properties = {
+                    top: npTop,
+                    bottom: npBottom,
+                    left: npLeft,
+                    right: npRight,
+                    columnCount: 1,
+                    columnGutter: 0
+                };
+            } catch (eMargProp) {
+                newPage.marginPreferences.top = npTop;
+                newPage.marginPreferences.bottom = npBottom;
+                newPage.marginPreferences.left = npLeft;
+                newPage.marginPreferences.right = npRight;
+                newPage.marginPreferences.columnCount = 1;
+            }
+        } catch (eMarg) {}
+
         var newFrame = masterBodyFrame.override(newPage);
+        newFrame.label = "Booklet_Body_Story";
 
         currentFrame.nextTextFrame = newFrame;
         currentFrame = newFrame;
@@ -396,6 +426,32 @@ function ensureAllStyles(doc, stylesCfg) {
     });
     applyFontSafe(tcStyle, bodyFont);
 
+    // 10. Greek / Math Character Style & GREP Styles (STEP-7.1e)
+    // Tajawal has no Greek glyphs, so θ etc. render as missing-glyph boxes.
+    // Create character style "GreekMathChar" and add nested GREP style to Arabic styles.
+    var greekCharStyle = doc.characterStyles.itemByName("GreekMathChar");
+    if (!greekCharStyle.isValid) {
+        greekCharStyle = doc.characterStyles.add({ name: "GreekMathChar" });
+    }
+    applyFontSafe(greekCharStyle, mathFont);
+
+    var arabicStylesForGrep = [baStyle, chStyle, mqStyle, liStyle, thStyle, tcStyle];
+    for (var gIdx = 0; gIdx < arabicStylesForGrep.length; gIdx++) {
+        var pStyle = arabicStylesForGrep[gIdx];
+        try {
+            var grepStyle = pStyle.nestedGrepStyles.add();
+            grepStyle.appliedCharacterStyle = greekCharStyle;
+            grepStyle.grepExpression = "[\\x{0370}-\\x{03FF}\\x{2200}-\\x{22FF}\\x{221A}]";
+        } catch (eGrep) {
+            try {
+                pStyle.nestedGrepStyles.add({
+                    appliedCharacterStyle: greekCharStyle,
+                    grepExpression: "[\\x{0370}-\\x{03FF}\\x{2200}-\\x{22FF}\\x{221A}]"
+                });
+            } catch (eGrep2) {}
+        }
+    }
+
     return {
         titleStyle: chStyle,
         chapterHeaderStyle: chStyle,
@@ -410,8 +466,45 @@ function ensureAllStyles(doc, stylesCfg) {
         runningHeaderStyle: rhStyle,
         runningFooterStyle: rfStyle,
         tableHeaderStyle: thStyle,
-        tableCellStyle: tcStyle
+        tableCellStyle: tcStyle,
+        greekMathCharStyle: greekCharStyle
     };
+}
+
+
+// ─── Usable Frame Width Helper ────────────────────────────────────────
+
+/**
+ * Compute the usable text width of a text frame.
+ *
+ * Implemented per STEP-7.1e: computes actual width from frame's geometricBounds
+ * (x1 - x0) minus its text frame inset spacings.
+ *
+ * @param {TextFrame} frame - The text frame to measure.
+ * @returns {number} Usable width in points.
+ */
+function getFrameUsableWidth(frame) {
+    var gb = frame.geometricBounds; // [y0, x0, y1, x1]
+    var frameWidth = gb[3] - gb[1];
+    var leftInset = 0;
+    var rightInset = 0;
+    try {
+        var insets = frame.textFramePreferences.insetSpacing;
+        if (typeof insets === "number") {
+            leftInset = insets;
+            rightInset = insets;
+        } else if (insets instanceof Array || (insets && typeof insets.length === "number")) {
+            if (insets.length === 4) {
+                leftInset = insets[1];
+                rightInset = insets[3];
+            } else if (insets.length === 1) {
+                leftInset = insets[0];
+                rightInset = insets[0];
+            }
+        }
+    } catch (eInsets) {}
+    var usable = frameWidth - leftInset - rightInset;
+    return (usable > 0) ? usable : frameWidth;
 }
 
 
@@ -461,11 +554,21 @@ function generateBookletMain() {
         // [y0, x0, y1, x1] bounds are strictly page-relative on both left and right master pages.
         doc.viewPreferences.rulerOrigin = RulerOrigin.PAGE_ORIGIN;
 
+        // Polyfill PageBindingOptions if needed (STEP-7.1e)
+        try {
+            if (typeof PageBindingOptions !== "undefined") {
+                if (typeof PageBindingOptions.RIGHT_TO_LEFT_BINDING === "undefined" && typeof PageBindingOptions.RIGHT_TO_LEFT !== "undefined") {
+                    PageBindingOptions.RIGHT_TO_LEFT_BINDING = PageBindingOptions.RIGHT_TO_LEFT;
+                }
+            }
+        } catch (ePoly) {}
+
         with (doc.documentPreferences) {
             pageHeight = geometry.height_pt + "pt";
             pageWidth = geometry.width_pt + "pt";
             facingPages = (geometry.facing_pages !== false);
             pagesPerDocument = 1;
+            pageBinding = PageBindingOptions.RIGHT_TO_LEFT_BINDING;
             if (typeof geometry.bleed_mm === "number" && geometry.bleed_mm > 0) {
                 var bleedPt = geometry.bleed_mm * 2.83465;
                 documentBleedTopOffset = bleedPt + "pt";
@@ -473,6 +576,14 @@ function generateBookletMain() {
                 documentBleedInsideOrLeftOffset = bleedPt + "pt";
                 documentBleedOutsideOrRightOffset = bleedPt + "pt";
             }
+        }
+
+        try {
+            doc.documentPreferences.pageBinding = PageBindingOptions.RIGHT_TO_LEFT_BINDING;
+        } catch (eBind) {
+            try {
+                doc.documentPreferences.pageBinding = PageBindingOptions.RIGHT_TO_LEFT;
+            } catch (eBind2) {}
         }
 
         // ── 5. Setup Palette Colors ─────────────────────────────────────
@@ -488,6 +599,7 @@ function generateBookletMain() {
         var styles = ensureAllStyles(doc, stylesCfg);
 
         // ── 7. Configure Master Spread ──────────────────────────────────
+        geometry.footer_text = payload.footer_text || (payload.pages && payload.pages[0] && payload.pages[0].footer_text) || geometry.footer_text || "";
         setupMasterSpread(doc, geometry, colors, styles);
 
         // ── 8. Initialize First Page Body Frame ─────────────────────────
@@ -497,7 +609,37 @@ function generateBookletMain() {
         var masterBodyFrame = findMasterFrameByLabelOnSide(
             firstPage.appliedMaster, "Booklet_Body_Story", firstPage.side
         );
+
+        // Apply marginPreferences matching body frame (STEP-7.1e)
+        try {
+            var mgbFirst = masterBodyFrame.geometricBounds;
+            var fpBounds = firstPage.bounds;
+            var fpWidth = fpBounds[3] - fpBounds[1];
+            var fpHeight = fpBounds[2] - fpBounds[0];
+            var fpTop = mgbFirst[0];
+            var fpLeft = mgbFirst[1];
+            var fpBottom = fpHeight - mgbFirst[2];
+            var fpRight = fpWidth - mgbFirst[3];
+            try {
+                firstPage.marginPreferences.properties = {
+                    top: fpTop,
+                    bottom: fpBottom,
+                    left: fpLeft,
+                    right: fpRight,
+                    columnCount: 1,
+                    columnGutter: 0
+                };
+            } catch (eFPProp) {
+                firstPage.marginPreferences.top = fpTop;
+                firstPage.marginPreferences.bottom = fpBottom;
+                firstPage.marginPreferences.left = fpLeft;
+                firstPage.marginPreferences.right = fpRight;
+                firstPage.marginPreferences.columnCount = 1;
+            }
+        } catch (eFPMarg) {}
+
         var currentFrame = masterBodyFrame.override(firstPage);
+        currentFrame.label = "Booklet_Body_Story";
         var story = currentFrame.parentStory;
 
         // Calculate available body frame width for tables using requireMarginField (no fallbacks)
@@ -550,8 +692,9 @@ function generateBookletMain() {
             var isTable = (item.item_type === "table" || (!item.block_type && (item.headers || item.rows)));
 
             if (isTable) {
-                // RTL Table Injection
-                injectRTLTable(story, item, bodyWidthPt, colors, styles);
+                // RTL Table Injection: compute width from actual body frame (STEP-7.1e)
+                var currentTableWidth = getFrameUsableWidth(currentFrame);
+                injectRTLTable(story, item, currentTableWidth, colors, styles);
             } else if (item.block_type === "math_formula") {
                 // Math Formula Injection (strict LTR)
                 injectMathFormulaBlock(story, item.raw_content || "", styles);
@@ -610,7 +753,63 @@ function generateBookletMain() {
             doc.exportFile(ExportFormat.PDF_TYPE, pdfFile, false);
         }
 
-        // ── 12. Write Successful Result JSON ────────────────────────────
+        // ── 12. Collect Page Layout Diagnostics (STEP-7.1e) ────────────
+        var pageDiagnostics = [];
+        for (var p = 0; p < doc.pages.count(); p++) {
+            var pg = doc.pages.item(p);
+            var pSideStr = "";
+            try {
+                pSideStr = pg.side.toString();
+            } catch (eSide) {
+                pSideStr = String(pg.side);
+            }
+
+            var bBounds = null;
+            var pageTableWidths = [];
+
+            for (var tfIdx = 0; tfIdx < pg.textFrames.count(); tfIdx++) {
+                var tf = pg.textFrames.item(tfIdx);
+                if (tf.label === "Booklet_Body_Story") {
+                    bBounds = tf.geometricBounds;
+                }
+                try {
+                    if (tf.tables && tf.tables.count() > 0) {
+                        for (var tbIdx = 0; tbIdx < tf.tables.count(); tbIdx++) {
+                            pageTableWidths.push(tf.tables.item(tbIdx).width);
+                        }
+                    }
+                } catch (eTbl) {}
+            }
+
+            // Fallback for filler pages without body frame override
+            if (!bBounds && pg.appliedMaster && pg.appliedMaster.isValid) {
+                try {
+                    var mbf = findMasterFrameByLabelOnSide(pg.appliedMaster, "Booklet_Body_Story", pg.side);
+                    if (mbf && mbf.isValid) {
+                        bBounds = mbf.geometricBounds;
+                    }
+                } catch (eMbf) {}
+            }
+
+            var pageNum = p + 1;
+            try {
+                if (pg.name) {
+                    var parsed = parseInt(pg.name, 10);
+                    if (!isNaN(parsed)) pageNum = parsed;
+                }
+            } catch (ePn) {}
+
+            pageDiagnostics.push({
+                page_number: pageNum,
+                side: pSideStr,
+                geometric_bounds: bBounds,
+                geometricBounds: bBounds,
+                table_width: (pageTableWidths.length > 0) ? pageTableWidths[0] : null,
+                table_widths: pageTableWidths
+            });
+        }
+
+        // ── 13. Write Successful Result JSON ────────────────────────────
         var resultData = {
             status: "ok",
             page_count: doc.pages.count(),
@@ -619,6 +818,7 @@ function generateBookletMain() {
             composer_ok: true,
             output_indd: inddPath,
             output_pdf: pdfPath,
+            pages: pageDiagnostics,
             warnings: warnings
         };
 

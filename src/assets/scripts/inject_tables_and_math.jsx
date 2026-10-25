@@ -188,11 +188,27 @@ function injectRTLTable(story, tableData, frameWidthPt, colors, styles) {
         totalWeight += colCharWeights[w];
     }
 
+    var sumAssigned = 0;
     for (var colIdx = 0; colIdx < colCount; colIdx++) {
         var assignedWidth =
             (colCharWeights[colIdx] / totalWeight) * frameWidthPt;
         indTable.columns.item(colIdx).width = assignedWidth;
+        sumAssigned += assignedWidth;
     }
+    // Anchor edge-to-edge: adjust last column for any sub-point rounding remainder
+    if (colCount > 0 && Math.abs(frameWidthPt - sumAssigned) > 0.001) {
+        indTable.columns.item(colCount - 1).width += (frameWidthPt - sumAssigned);
+    }
+
+    // Anchor the table so it spans the frame edge to edge:
+    // Clear left/right/firstLine indent on the containing paragraph so the table
+    // is not inset by paragraph styles.
+    try {
+        var parentPara = indTable.storyOffset.paragraphs.item(0);
+        parentPara.leftIndent = 0;
+        parentPara.rightIndent = 0;
+        parentPara.firstLineIndent = 0;
+    } catch (ePara) {}
 
     // ── 4. Stroke & Border Configuration ─────────────────────────
     // Top/bottom borders use the primary color at 1pt weight.
@@ -212,7 +228,8 @@ function injectRTLTable(story, tableData, frameWidthPt, colors, styles) {
     if (headers.length > 0) {
         for (var hIdx = 0; hIdx < colCount; hIdx++) {
             var hCell = indTable.rows.item(0).cells.item(hIdx);
-            hCell.contents = headers[hIdx] || "";
+            var hText = headers[hIdx] || "";
+            hCell.contents = hText;
             hCell.fillColor = colors.primaryColor;
             hCell.verticalJustification =
                 VerticalJustification.CENTER_ALIGN;
@@ -223,6 +240,22 @@ function injectRTLTable(story, tableData, frameWidthPt, colors, styles) {
             hCell.paragraphs.everyItem().applyParagraphStyle(
                 styles.tableHeaderStyle, false
             );
+
+            // BiDi IN TABLE CELLS (STEP-7.1e):
+            // In injectRTLTable, for every cell whose text contains NO Arabic letter ([\u0600-\u06FF]),
+            // set paragraphDirection = LEFT_TO_RIGHT and justification = CENTER_ALIGN.
+            // Known limitation: Cells that mix Arabic and Latin/math keep RTL.
+            // Do not insert any control characters.
+            var hasArabicH = /[\u0600-\u06FF]/.test(hText);
+            if (!hasArabicH) {
+                try {
+                    var hParas = hCell.paragraphs.everyItem();
+                    hParas.paragraphDirection =
+                        ParagraphDirectionOptions.LEFT_TO_RIGHT_DIRECTION;
+                    hParas.justification =
+                        Justification.CENTER_ALIGN;
+                } catch (eHBiDi) {}
+            }
         }
     }
 
@@ -237,8 +270,8 @@ function injectRTLTable(story, tableData, frameWidthPt, colors, styles) {
 
         for (var cellIdx = 0; cellIdx < colCount; cellIdx++) {
             var bCell = targetRow.cells.item(cellIdx);
-            bCell.contents =
-                (rowData && rowData[cellIdx]) ? rowData[cellIdx] : "";
+            var cText = (rowData && rowData[cellIdx]) ? rowData[cellIdx] : "";
+            bCell.contents = cText;
             bCell.fillColor =
                 isAlt ? colors.tableAltColor : colors.paperColor;
             bCell.verticalJustification =
@@ -252,6 +285,22 @@ function injectRTLTable(story, tableData, frameWidthPt, colors, styles) {
             bCell.paragraphs.everyItem().applyParagraphStyle(
                 styles.tableCellStyle, false
             );
+
+            // BiDi IN TABLE CELLS (STEP-7.1e):
+            // In injectRTLTable, for every cell whose text contains NO Arabic letter ([\u0600-\u06FF]),
+            // set paragraphDirection = LEFT_TO_RIGHT and justification = CENTER_ALIGN.
+            // Known limitation: Cells that mix Arabic and Latin/math keep RTL.
+            // Do not insert any control characters.
+            var hasArabicB = /[\u0600-\u06FF]/.test(cText);
+            if (!hasArabicB) {
+                try {
+                    var bParas = bCell.paragraphs.everyItem();
+                    bParas.paragraphDirection =
+                        ParagraphDirectionOptions.LEFT_TO_RIGHT_DIRECTION;
+                    bParas.justification =
+                        Justification.CENTER_ALIGN;
+                } catch (eBBiDi) {}
+            }
         }
     }
 

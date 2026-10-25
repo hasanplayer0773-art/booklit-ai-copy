@@ -166,15 +166,13 @@ function setupMasterSpread(doc, docCfg, colors, styles) {
 
         // ── 2c. Header Ribbon Frame ──
         // Sits above the top margin line, vertically bottom-aligned.
-        // Contains: Section Marker | Running Header Variable
+        // Contains: Running Header Variable (SECTION_MARKER removed per STEP-7.1e)
         var hFrame = mPage.textFrames.add({
             geometricBounds: [mTop - 18, left, mTop - 4, right]
         });
         hFrame.textFramePreferences.verticalJustification =
             VerticalJustification.BOTTOM_ALIGN;
-        hFrame.insertionPoints[0].contents = SpecialCharacters.SECTION_MARKER;
-        hFrame.insertionPoints[-1].contents = "   |   ";
-        hFrame.insertionPoints[-1].textVariableInstances.add({
+        hFrame.insertionPoints[0].textVariableInstances.add({
             associatedTextVariable: headerVar
         });
         hFrame.paragraphs.everyItem().applyParagraphStyle(
@@ -190,7 +188,8 @@ function setupMasterSpread(doc, docCfg, colors, styles) {
 
         // ── 2e. Footer Ribbon Frame (Auto Page Number) ──
         // Sits below the bottom margin line, vertically top-aligned.
-        // Contains: "Booklet_AI   •   صفحة " + AUTO_PAGE_NUMBER
+        // Contains: configurable footer_text (default empty = only page number).
+        // Hardcoded "Booklet_AI •" removed per STEP-7.1e.
         var fFrame = mPage.textFrames.add({
             geometricBounds: [
                 pHeight - mBottom + 4,
@@ -201,8 +200,14 @@ function setupMasterSpread(doc, docCfg, colors, styles) {
         });
         fFrame.textFramePreferences.verticalJustification =
             VerticalJustification.TOP_ALIGN;
-        fFrame.insertionPoints[0].contents = "Booklet_AI   \u2022   \u0635\u0641\u062D\u0629 ";
-        fFrame.insertionPoints[-1].contents = SpecialCharacters.AUTO_PAGE_NUMBER;
+
+        var footerText = docCfg.footer_text || (docCfg.geometry && docCfg.geometry.footer_text) || "";
+        if (footerText && footerText.length > 0) {
+            fFrame.insertionPoints[0].contents = footerText + "   |   ";
+            fFrame.insertionPoints[-1].contents = SpecialCharacters.AUTO_PAGE_NUMBER;
+        } else {
+            fFrame.insertionPoints[0].contents = SpecialCharacters.AUTO_PAGE_NUMBER;
+        }
         fFrame.paragraphs.everyItem().applyParagraphStyle(
             styles.runningFooterStyle, false
         );
@@ -264,6 +269,33 @@ function setupMasterSpread(doc, docCfg, colors, styles) {
             geometricBounds: [bodyTop, left, bodyBottom, right]
         });
         bFrame.label = "Booklet_Body_Story";
+
+        // ── 2g. Margin Guides (STEP-7.1e) ──
+        // Set master page marginPreferences to match body frame margins
+        // (inside/outside according to page side) so InDesign's guides equal real margins.
+        var topMargin = bodyTop;
+        var bottomMargin = mBottom + 6;
+        var leftMargin = isSingleSided ? mOutside : (isLeft ? mOutside : mInside);
+        var rightMargin = isSingleSided ? mOutside : (isLeft ? mInside : mOutside);
+
+        try {
+            mPage.marginPreferences.properties = {
+                top: topMargin,
+                bottom: bottomMargin,
+                left: leftMargin,
+                right: rightMargin,
+                columnCount: 1,
+                columnGutter: 0
+            };
+        } catch (eMarg) {
+            try {
+                mPage.marginPreferences.top = topMargin;
+                mPage.marginPreferences.bottom = bottomMargin;
+                mPage.marginPreferences.left = leftMargin;
+                mPage.marginPreferences.right = rightMargin;
+                mPage.marginPreferences.columnCount = 1;
+            } catch (eMarg2) {}
+        }
     }
 }
 
@@ -350,6 +382,24 @@ function addBlankFillerPages(doc, targetPageCount, masterName) {
         var lastPage = doc.pages.item(-1);
         var newPage = doc.pages.add(LocationOptions.AFTER, lastPage);
         newPage.appliedMaster = getBookletMaster(doc);
+
+        // Apply marginPreferences to filler page matching master body frame (STEP-7.1e)
+        try {
+            var mSpread = newPage.appliedMaster;
+            var mBodyFrame = findMasterFrameByLabelOnSide(mSpread, "Booklet_Body_Story", newPage.side);
+            var mgb = mBodyFrame.geometricBounds;
+            var pHeightPt = newPage.bounds[2] - newPage.bounds[0];
+            var pWidthPt = newPage.bounds[3] - newPage.bounds[1];
+            newPage.marginPreferences.properties = {
+                top: mgb[0],
+                bottom: pHeightPt - mgb[2],
+                left: mgb[1],
+                right: pWidthPt - mgb[3],
+                columnCount: 1,
+                columnGutter: 0
+            };
+        } catch (eFMP) {}
+
         // Filler pages carry no body-frame override — no injected body
         // content appears. The header ribbon, footer ribbon, and
         // AUTO_PAGE_NUMBER are inherited automatically from the master

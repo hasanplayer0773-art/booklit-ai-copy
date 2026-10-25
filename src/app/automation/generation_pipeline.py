@@ -39,6 +39,7 @@ def build_payload(
     styles_cfg: TypographyStylesConfig,
     output_dir: Union[Path, str],
     binding: Union[BindingMethod, str] = "saddle_stitch",
+    footer_text: Optional[str] = None,
 ) -> Path:
     """Build and write the JSON payload for generate_booklet.jsx.
 
@@ -135,16 +136,27 @@ def build_payload(
             "tables": p_tables,
         })
 
+    first_page_footer = (
+        pages_list[0]["footer_text"]
+        if pages_list and pages_list[0].get("footer_text")
+        else ""
+    )
+    resolved_footer_text = footer_text if footer_text is not None else first_page_footer
+
+    payload_geometry = geometry.to_jsx_payload()
+    payload_geometry["footer_text"] = resolved_footer_text or ""
+
     payload_data: Dict[str, Any] = {
         "doc_id": doc_id,
         "file_path": document.file_path,
         "file_type": document.file_type,
+        "footer_text": resolved_footer_text or "",
         "output_dir": str(out_path.resolve()),
         "output_indd": str(indd_file.resolve()),
         "output_pdf": str(pdf_file.resolve()),
         "result_file_path": str(result_file.resolve()),
         "binding": binding_str,
-        "geometry": geometry.to_jsx_payload(),
+        "geometry": payload_geometry,
         "styles": styles_cfg.model_dump(),
         "blocks": blocks_list,
         "tables": tables_list,
@@ -194,6 +206,7 @@ def generate_booklet(
     supervisor: Optional[COMSupervisor] = None,
     binding: Union[BindingMethod, str] = "saddle_stitch",
     preflight_output_path: Optional[str] = None,
+    footer_text: Optional[str] = None,
 ) -> Any:
     """End-to-end booklet generation entrypoint.
 
@@ -208,6 +221,7 @@ def generate_booklet(
         supervisor: Optional COMSupervisor instance.
         binding: Binding method for page imposition.
         preflight_output_path: Optional post-generation preflight path.
+        footer_text: Optional footer text override.
 
     Returns:
         Result from supervisor.run_job.
@@ -218,6 +232,7 @@ def generate_booklet(
         styles_cfg=styles_cfg,
         output_dir=output_dir,
         binding=binding,
+        footer_text=footer_text,
     )
     return submit_generate_booklet_job(
         payload_path=payload_path,

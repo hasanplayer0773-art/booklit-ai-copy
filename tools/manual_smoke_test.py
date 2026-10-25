@@ -220,6 +220,16 @@ def run_smoke_test(output_dir: Path, build_only: bool = False) -> int:
             print(f"    - World-Ready Composer: {'✓ OK' if result.get('composer_ok') else '✗ FAIL'}")
             print(f"    - Output INDD: {result.get('output_indd')}")
             print(f"    - Output PDF:  {result.get('output_pdf')}")
+            pages_diag = result.get("pages", [])
+            if pages_diag:
+                print("\n    [+] Page Layout Diagnostics (STEP-7.1e):")
+                for p_info in pages_diag:
+                    p_num = p_info.get("page_number")
+                    p_side = p_info.get("side")
+                    p_bounds = p_info.get("geometric_bounds") or p_info.get("geometricBounds")
+                    t_width = p_info.get("table_width")
+                    t_str = f", table_width={t_width:.2f}pt" if t_width is not None else ""
+                    print(f"      * Page {p_num} (side={p_side}): bounds={p_bounds}{t_str}")
             warnings = result.get("warnings", [])
             if warnings:
                 print(f"    - Warnings ({len(warnings)}):")
