@@ -133,6 +133,18 @@ class COMSupervisor:
                 self.last_preflight_report = report
                 return report
 
+            # Read result JSON for generate_booklet or add_filler_pages if present
+            try:
+                if Path(job_request.payload_file_path).exists():
+                    with open(job_request.payload_file_path, "r", encoding="utf-8") as f:
+                        payload = json.load(f)
+                    result_path = payload.get("result_file_path")
+                    if result_path and Path(result_path).exists():
+                        with open(result_path, "r", encoding="utf-8") as rf:
+                            return json.load(rf)
+            except Exception:
+                pass
+
             return None
         except COMOperationTimeout:
             raise
@@ -328,9 +340,73 @@ def _com_worker_entrypoint(
         pythoncom.CoUninitialize()
 
 
-# ─── Job Handler Stubs ─────────────────────────────────────────────────
-# These are placeholder implementations. Full implementations will be
-# added in subsequent STEPs (STEP-2.1+). They are top-level functions
+# ─── Script Resolver & Error Mapping Helpers ──────────────────────────
+
+
+def _find_jsx_script(script_name: str) -> Path:
+    """Resolve the absolute path to a JSX script across dev and packaged modes."""
+    import sys
+
+    # 1. PyInstaller bundled path
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        p = Path(sys._MEIPASS) / "assets" / "scripts" / script_name
+        if p.exists():
+            return p
+
+    # 2. Project src/assets/scripts
+    base_dir = Path(__file__).resolve().parent.parent.parent  # src
+    p = base_dir / "assets" / "scripts" / script_name
+    if p.exists():
+        return p
+
+    # 3. Workspace root / assets / scripts
+    root_p = Path(__file__).resolve().parent.parent.parent.parent / "assets" / "scripts" / script_name
+    if root_p.exists():
+        return root_p
+
+    # 4. Fallback search relative to cwd
+    cwd_p = Path.cwd() / "src" / "assets" / "scripts" / script_name
+    if cwd_p.exists():
+        return cwd_p
+    cwd_root_p = Path.cwd() / "assets" / "scripts" / script_name
+    if cwd_root_p.exists():
+        return cwd_root_p
+
+    raise FileNotFoundError(f"JSX script '{script_name}' not found.")
+
+
+def _raise_typed_error(error_msg: str, original_exc: Optional[Exception] = None) -> None:
+    """Map error message string from JSX / InDesign to typed BookletError exceptions."""
+    from app.core.exceptions import (
+        BookletError,
+        ContentExceedsEstimateError,
+        InvalidBodyFrameGeometryError,
+        MarginConfigError,
+        RTLTableUnsupportedError,
+        StyleMappingError,
+        TextIntegrityError,
+    )
+
+    msg_lower = error_msg.lower()
+    if "textintegrityerror" in msg_lower:
+        raise TextIntegrityError(error_msg) from original_exc
+    elif "stylemappingerror" in msg_lower:
+        raise StyleMappingError(error_msg) from original_exc
+    elif "contentexceedsestimateerror" in msg_lower:
+        raise ContentExceedsEstimateError(error_msg) from original_exc
+    elif "invalidbodyframegeometryerror" in msg_lower:
+        raise InvalidBodyFrameGeometryError(error_msg) from original_exc
+    elif "marginconfigerror" in msg_lower:
+        raise MarginConfigError(error_msg) from original_exc
+    elif "rtltableunsupportederror" in msg_lower:
+        raise RTLTableUnsupportedError(error_msg) from original_exc
+    else:
+        raise BookletError(error_msg) from original_exc
+
+
+# ─── Job Handlers ──────────────────────────────────────────────────────
+# Real implementations (STEP-7.1) running JSX scripts via app.DoScript
+# and updating heartbeats between stages. They are top-level functions
 # so that job_command (a string) selects the function via dict lookup —
 # no function object ever crosses the process boundary.
 
@@ -340,23 +416,83 @@ def _run_generate_booklet(
     payload_file_path: str,
     heartbeat: multiprocessing.Value,
 ) -> None:
-    """Generate a complete booklet in InDesign from the payload.
+    """Generate a complete booklet in InDesign from the payload via generate_booklet.jsx.
 
-    Full implementation in STEP-2.1 / STEP-2.2 / STEP-2.3.
+    Executes generate_booklet.jsx via app.DoScript (JAVASCRIPT) and updates
+    the heartbeat between stages. Reads the result JSON and raises typed errors
+    on failure.
     """
     heartbeat.value = time.time()
     logger.info("generate_booklet: reading payload from %s", payload_file_path)
 
-    # Placeholder: verify the payload file exists and is valid JSON
     payload_path = Path(payload_file_path)
     if not payload_path.exists():
         raise FileNotFoundError(f"Payload file not found: {payload_file_path}")
 
     with open(payload_path, "r", encoding="utf-8") as f:
-        _payload = json.load(f)
+        payload = json.load(f)
+
+    result_file_path = payload.get("result_file_path")
+    if not result_file_path:
+        result_file_path = str(payload_path.with_name(f"{payload.get('doc_id', 'booklet')}_result.json"))
+
+    # Remove stale result file if present
+    res_path = Path(result_file_path)
+    if res_path.exists():
+        try:
+            res_path.unlink()
+        except Exception:
+            pass
+
+    jsx_path = _find_jsx_script("generate_booklet.jsx")
+    logger.info("generate_booklet: executing JSX script %s", jsx_path)
+
+    # Stage 1: Setup scriptArgs and execute DoScript
+    heartbeat.value = time.time()
+    try:
+        app.ScriptArgs.SetValue("payloadFile", str(payload_path.resolve()))
+    except Exception as e_args:
+        logger.debug("ScriptArgs.SetValue warning: %s", e_args)
 
     heartbeat.value = time.time()
-    logger.info("generate_booklet: payload loaded successfully (stub — full impl in STEP-2.x)")
+    try:
+        # ScriptLanguage.JAVASCRIPT = 1246973031 ('jasr')
+        app.DoScript(str(jsx_path.resolve()), 1246973031, [str(payload_path.resolve())])
+    except Exception as exc:
+        heartbeat.value = time.time()
+        logger.error("DoScript failed during generate_booklet: %s", exc)
+        # Check if result JSON was written with detailed error message
+        if res_path.exists():
+            try:
+                with open(res_path, "r", encoding="utf-8") as rf:
+                    res_obj = json.load(rf)
+                if res_obj.get("status") == "error" or "error" in res_obj:
+                    _raise_typed_error(res_obj.get("error", str(exc)), original_exc=exc)
+            except Exception:
+                pass
+        _raise_typed_error(str(exc), original_exc=exc)
+
+    # Stage 2: Read and verify result JSON
+    heartbeat.value = time.time()
+    if not res_path.exists():
+        from app.core.exceptions import BookletError
+        raise BookletError(
+            f"generate_booklet completed DoScript but result JSON was not found at {result_file_path}"
+        )
+
+    with open(res_path, "r", encoding="utf-8") as rf:
+        result = json.load(rf)
+
+    if result.get("status") == "error" or "error" in result:
+        err_msg = result.get("error", "Unknown generation failure")
+        _raise_typed_error(err_msg)
+
+    heartbeat.value = time.time()
+    logger.info(
+        "generate_booklet succeeded: %d pages generated, %d warnings",
+        result.get("page_count", 0),
+        len(result.get("warnings", [])),
+    )
 
 
 def _run_add_filler_pages(
@@ -364,12 +500,92 @@ def _run_add_filler_pages(
     payload_file_path: str,
     heartbeat: multiprocessing.Value,
 ) -> None:
-    """Add blank filler pages to meet binding requirements.
+    """Add blank filler pages to meet binding signature requirements.
 
-    Full implementation in STEP-2.1.
+    Executes addBlankFillerPages via app.DoScript (JAVASCRIPT) and updates
+    the heartbeat between stages. Reads the result JSON and raises typed errors
+    on failure.
     """
     heartbeat.value = time.time()
-    logger.info("add_filler_pages: stub — full implementation in STEP-2.1")
+    logger.info("add_filler_pages: reading payload from %s", payload_file_path)
+
+    payload_path = Path(payload_file_path)
+    if not payload_path.exists():
+        raise FileNotFoundError(f"Payload file not found: {payload_file_path}")
+
+    with open(payload_path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+
+    target_page_count = int(payload.get("target_page_count", payload.get("target", 4)))
+    master_name = payload.get("master_name", "Booklet_Master")
+    result_file_path = payload.get("result_file_path")
+    if not result_file_path:
+        result_file_path = str(payload_path.with_name(f"{payload.get('doc_id', 'filler')}_result.json"))
+
+    res_path = Path(result_file_path)
+    if res_path.exists():
+        try:
+            res_path.unlink()
+        except Exception:
+            pass
+
+    master_spread_jsx = _find_jsx_script("build_master_spread.jsx")
+    json2_jsx = _find_jsx_script("lib/json2.jsx")
+    loader_jsx = _find_jsx_script("payload_loader.jsx")
+
+    escaped_result = str(res_path.resolve()).replace("\\", "/")
+    escaped_ms = str(master_spread_jsx.resolve()).replace("\\", "/")
+    escaped_json2 = str(json2_jsx.resolve()).replace("\\", "/")
+    escaped_loader = str(loader_jsx.resolve()).replace("\\", "/")
+
+    jsx_code = f"""
+    #include "{escaped_json2}"
+    #include "{escaped_loader}"
+    #include "{escaped_ms}"
+
+    try {{
+        var doc = app.activeDocument;
+        addBlankFillerPages(doc, {target_page_count}, "{master_name}");
+        writeResultToFile("{escaped_result}", {{
+            status: "ok",
+            page_count: doc.pages.count()
+        }});
+    }} catch (e) {{
+        try {{
+            writeResultToFile("{escaped_result}", {{
+                status: "error",
+                error: e.message || String(e)
+            }});
+        }} catch (eWrite) {{}}
+        throw e;
+    }}
+    """
+
+    heartbeat.value = time.time()
+    try:
+        app.DoScript(jsx_code, 1246973031)
+    except Exception as exc:
+        heartbeat.value = time.time()
+        logger.error("DoScript failed during add_filler_pages: %s", exc)
+        if res_path.exists():
+            try:
+                with open(res_path, "r", encoding="utf-8") as rf:
+                    res_obj = json.load(rf)
+                if res_obj.get("status") == "error" or "error" in res_obj:
+                    _raise_typed_error(res_obj.get("error", str(exc)), original_exc=exc)
+            except Exception:
+                pass
+        _raise_typed_error(str(exc), original_exc=exc)
+
+    heartbeat.value = time.time()
+    if res_path.exists():
+        with open(res_path, "r", encoding="utf-8") as rf:
+            result = json.load(rf)
+        if result.get("status") == "error" or "error" in result:
+            _raise_typed_error(result.get("error", "Filler page insertion failed"))
+
+    heartbeat.value = time.time()
+    logger.info("add_filler_pages finished successfully (target=%d)", target_page_count)
 
 
 def _run_verify_indesign(
