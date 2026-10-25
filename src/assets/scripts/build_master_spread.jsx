@@ -237,11 +237,7 @@ function setupMasterSpread(doc, docCfg, colors, styles) {
                 }
             } catch (eMarker) {
                 // Defensive fallback: apply to footer frame paragraphs if character-level indexing differs
-                try {
-                    fFrame.paragraphs.everyItem().digitsType = targetDigits;
-                } catch (eFrame) {
-                    // Non-ME edition without digitsType support
-                }
+                fFrame.paragraphs.everyItem().digitsType = targetDigits;
             }
         }
 
@@ -270,32 +266,18 @@ function setupMasterSpread(doc, docCfg, colors, styles) {
         });
         bFrame.label = "Booklet_Body_Story";
 
-        // ── 2g. Margin Guides (STEP-7.1e) ──
-        // Set master page marginPreferences to match body frame margins
-        // (inside/outside according to page side) so InDesign's guides equal real margins.
-        var topMargin = bodyTop;
-        var bottomMargin = mBottom + 6;
-        var leftMargin = isSingleSided ? mOutside : (isLeft ? mOutside : mInside);
-        var rightMargin = isSingleSided ? mOutside : (isLeft ? mInside : mOutside);
-
-        try {
-            mPage.marginPreferences.properties = {
-                top: topMargin,
-                bottom: bottomMargin,
-                left: leftMargin,
-                right: rightMargin,
-                columnCount: 1,
-                columnGutter: 0
-            };
-        } catch (eMarg) {
-            try {
-                mPage.marginPreferences.top = topMargin;
-                mPage.marginPreferences.bottom = bottomMargin;
-                mPage.marginPreferences.left = leftMargin;
-                mPage.marginPreferences.right = rightMargin;
-                mPage.marginPreferences.columnCount = 1;
-            } catch (eMarg2) {}
-        }
+        // ── 2g. Margin Guides (STEP-7.1g) ──
+        // In InDesign facing pages: marginPreferences.left = INSIDE, marginPreferences.right = OUTSIDE.
+        // InDesign mirrors them automatically per page side.
+        // Single-sided documents use mOutside for both.
+        var leftMargin = isSingleSided ? mOutside : mInside;
+        var rightMargin = mOutside;
+        mPage.marginPreferences.top = bodyTop;
+        mPage.marginPreferences.bottom = mBottom + 6;
+        mPage.marginPreferences.left = leftMargin;
+        mPage.marginPreferences.right = rightMargin;
+        mPage.marginPreferences.columnCount = 1;
+        mPage.marginPreferences.columnGutter = 0;
     }
 }
 
@@ -382,23 +364,6 @@ function addBlankFillerPages(doc, targetPageCount, masterName) {
         var lastPage = doc.pages.item(-1);
         var newPage = doc.pages.add(LocationOptions.AFTER, lastPage);
         newPage.appliedMaster = getBookletMaster(doc);
-
-        // Apply marginPreferences to filler page matching master body frame (STEP-7.1e)
-        try {
-            var mSpread = newPage.appliedMaster;
-            var mBodyFrame = findMasterFrameByLabelOnSide(mSpread, "Booklet_Body_Story", newPage.side);
-            var mgb = mBodyFrame.geometricBounds;
-            var pHeightPt = newPage.bounds[2] - newPage.bounds[0];
-            var pWidthPt = newPage.bounds[3] - newPage.bounds[1];
-            newPage.marginPreferences.properties = {
-                top: mgb[0],
-                bottom: pHeightPt - mgb[2],
-                left: mgb[1],
-                right: pWidthPt - mgb[3],
-                columnCount: 1,
-                columnGutter: 0
-            };
-        } catch (eFMP) {}
 
         // Filler pages carry no body-frame override — no injected body
         // content appears. The header ribbon, footer ribbon, and

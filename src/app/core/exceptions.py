@@ -108,6 +108,10 @@ class MissingFontError(BookletError):
     """
 
 
+class GlyphCoverageError(BookletError):
+    """Raised when expected Greek/mathematical glyphs fail to receive styling in InDesign."""
+
+
 class MasterNotFoundError(BookletError):
     """Raised when a required master spread cannot be found in the InDesign document.
 

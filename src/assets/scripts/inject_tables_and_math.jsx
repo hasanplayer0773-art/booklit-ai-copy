@@ -203,12 +203,12 @@ function injectRTLTable(story, tableData, frameWidthPt, colors, styles) {
     // Anchor the table so it spans the frame edge to edge:
     // Clear left/right/firstLine indent on the containing paragraph so the table
     // is not inset by paragraph styles.
-    try {
-        var parentPara = indTable.storyOffset.paragraphs.item(0);
+    var parentPara = indTable.storyOffset.paragraphs.item(0);
+    if (parentPara && parentPara.isValid) {
         parentPara.leftIndent = 0;
         parentPara.rightIndent = 0;
         parentPara.firstLineIndent = 0;
-    } catch (ePara) {}
+    }
 
     // ── 4. Stroke & Border Configuration ─────────────────────────
     // Top/bottom borders use the primary color at 1pt weight.
@@ -248,13 +248,11 @@ function injectRTLTable(story, tableData, frameWidthPt, colors, styles) {
             // Do not insert any control characters.
             var hasArabicH = /[\u0600-\u06FF]/.test(hText);
             if (!hasArabicH) {
-                try {
-                    var hParas = hCell.paragraphs.everyItem();
-                    hParas.paragraphDirection =
-                        ParagraphDirectionOptions.LEFT_TO_RIGHT_DIRECTION;
-                    hParas.justification =
-                        Justification.CENTER_ALIGN;
-                } catch (eHBiDi) {}
+                var hParas = hCell.paragraphs.everyItem();
+                hParas.paragraphDirection =
+                    ParagraphDirectionOptions.LEFT_TO_RIGHT_DIRECTION;
+                hParas.justification =
+                    Justification.CENTER_ALIGN;
             }
         }
     }
@@ -293,13 +291,11 @@ function injectRTLTable(story, tableData, frameWidthPt, colors, styles) {
             // Do not insert any control characters.
             var hasArabicB = /[\u0600-\u06FF]/.test(cText);
             if (!hasArabicB) {
-                try {
-                    var bParas = bCell.paragraphs.everyItem();
-                    bParas.paragraphDirection =
-                        ParagraphDirectionOptions.LEFT_TO_RIGHT_DIRECTION;
-                    bParas.justification =
-                        Justification.CENTER_ALIGN;
-                } catch (eBBiDi) {}
+                var bParas = bCell.paragraphs.everyItem();
+                bParas.paragraphDirection =
+                    ParagraphDirectionOptions.LEFT_TO_RIGHT_DIRECTION;
+                bParas.justification =
+                    Justification.CENTER_ALIGN;
             }
         }
     }

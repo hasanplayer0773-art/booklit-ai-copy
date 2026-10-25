@@ -220,6 +220,12 @@ def run_smoke_test(output_dir: Path, build_only: bool = False) -> int:
             print(f"    - World-Ready Composer: {'✓ OK' if result.get('composer_ok') else '✗ FAIL'}")
             print(f"    - Output INDD: {result.get('output_indd')}")
             print(f"    - Output PDF:  {result.get('output_pdf')}")
+            if "greek_chars_styled" in result:
+                styled = result.get("greek_chars_styled")
+                expected = result.get("greek_chars_expected")
+                print(f"    - Greek/Math Glyphs:   {styled} styled (expected: {expected})")
+            if "greek_char_font" in result:
+                print(f"    - Greek/Math Font:     {result.get('greek_char_font')}")
             pages_diag = result.get("pages", [])
             if pages_diag:
                 print("\n    [+] Page Layout Diagnostics (STEP-7.1e):")

@@ -455,6 +455,7 @@ def _raise_typed_error(error_msg: str, original_exc: Optional[Exception] = None)
     from app.core.exceptions import (
         BookletError,
         ContentExceedsEstimateError,
+        GlyphCoverageError,
         InvalidBodyFrameGeometryError,
         MarginConfigError,
         MasterNotFoundError,
@@ -466,7 +467,9 @@ def _raise_typed_error(error_msg: str, original_exc: Optional[Exception] = None)
     )
 
     msg_lower = error_msg.lower()
-    if "missingfonterror" in msg_lower:
+    if "glyphcoverageerror" in msg_lower:
+        raise GlyphCoverageError(error_msg) from original_exc
+    elif "missingfonterror" in msg_lower:
         raise MissingFontError(error_msg) from original_exc
     elif "styleconfigerror" in msg_lower:
         raise StyleConfigError(error_msg) from original_exc

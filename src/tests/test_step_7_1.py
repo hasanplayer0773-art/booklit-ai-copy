@@ -614,28 +614,36 @@ class TestJSXScriptStaticContract:
         assert "doc.masterSpreads.itemByName" not in content
         assert "getBookletMaster(doc)" in content
 
-        # 9. STEP-7.1e Visual Fix Contracts
-        # 9a. GreekMathChar & GREP styles
-        assert "GreekMathChar" in content
+        # 9. STEP-7.1e / STEP-7.1g Glyph & Layout Contracts
+        # 9a. GreekMathChar & GREP constant
+        assert "GREEK_MATH_GREP_PATTERN" in content
+        assert r"[\\x{0370}-\\x{03FF}\\x{2070}-\\x{209F}\\x{2200}-\\x{22FF}\\x{2190}-\\x{21FF}]" in content
         assert "nestedGrepStyles.add" in content
-        assert r"[\\x{0370}-\\x{03FF}\\x{2200}-\\x{22FF}\\x{221A}]" in content
-        # 9b. Table width from geometricBounds
+        # 9b. Deterministic changeGrep styling (STEP-7.1g)
+        assert "app.findGrepPreferences = NothingEnum.NOTHING" in content
+        assert "app.changeGrepPreferences = NothingEnum.NOTHING" in content
+        assert "doc.changeGrep()" in content
+        assert "GlyphCoverageError" in content
+        assert "greek_chars_styled" in content
+        assert "greek_chars_expected" in content
+        assert "greek_char_font" in content
+        # 9c. Table width from geometricBounds
         assert "getFrameUsableWidth" in content
         assert "currentTableWidth = getFrameUsableWidth(currentFrame)" in content
-        # 9c. Explicit RTL page binding (STEP-7.1e / STEP-7.1f)
+        # 9d. Explicit RTL page binding (STEP-7.1e / STEP-7.1f)
         assert "PageBindingOptions.RIGHT_TO_LEFT" in content
         assert "pageBinding = PageBindingOptions.RIGHT_TO_LEFT" in content
         assert "RIGHT_TO_LEFT_BINDING" not in content
-        # 9d. Margin preferences matching body frame
-        assert "firstPage.marginPreferences" in content
-        assert "newPage.marginPreferences" in content
-        # 9e. Result JSON page diagnostics
+        # 9e. Per-page marginPreferences overrides removed (inherit from master, STEP-7.1g)
+        assert "firstPage.marginPreferences" not in content
+        assert "newPage.marginPreferences" not in content
+        # 9f. Result JSON page diagnostics
         assert "pages: pageDiagnostics" in content
         assert "page_number" in content
         assert "table_width" in content
 
     def test_build_master_spread_jsx_contracts(self):
-        """Verify build_master_spread.jsx implements STEP-7.1d and STEP-7.1e rules."""
+        """Verify build_master_spread.jsx implements STEP-7.1d, STEP-7.1e, and STEP-7.1g rules."""
         ms_path = _find_jsx_script("build_master_spread.jsx")
         assert ms_path.exists()
         content = ms_path.read_text(encoding="utf-8")
@@ -658,7 +666,12 @@ class TestJSXScriptStaticContract:
         assert "Booklet_AI   \\u2022" not in content
         assert "footer_text" in content
         assert "mPage.marginPreferences" in content
-        assert "newPage.marginPreferences" in content
+
+        # 5. STEP-7.1g Master Facing Page Margins (left=inside, right=outside)
+        # and no per-page override in filler pages
+        assert "leftMargin = isSingleSided ? mOutside : mInside" in content
+        assert "rightMargin = mOutside" in content
+        assert "newPage.marginPreferences" not in content
 
     def test_inject_tables_and_math_step_7_1e_contracts(self):
         """Verify inject_tables_and_math.jsx implements STEP-7.1e BiDi and edge-to-edge rules."""
@@ -736,3 +749,60 @@ class TestJSXScriptStaticContract:
         payload2 = json.loads(p_path2.read_text(encoding="utf-8"))
         assert payload2["footer_text"] == "مخصص"
         assert payload2["geometry"]["footer_text"] == "مخصص"
+
+    def test_no_empty_catch_blocks_in_any_jsx_file(self):
+        """Verify no .jsx file in src/assets/scripts contains an empty catch block (STEP-7.1g)."""
+        import re
+
+        scripts_dir = Path(__file__).resolve().parent.parent / "assets" / "scripts"
+        assert scripts_dir.is_dir()
+        jsx_files = list(scripts_dir.glob("*.jsx"))
+        assert len(jsx_files) > 0
+
+        empty_catch_pattern = re.compile(r"catch\s*\([^\)]*\)\s*\{([^}]*)\}")
+
+        violations = []
+        for jf in jsx_files:
+            content = jf.read_text(encoding="utf-8")
+            for match in empty_catch_pattern.finditer(content):
+                body = match.group(1).strip()
+                # Strip single-line and multi-line comments
+                body_clean = re.sub(r"//[^\r\n]*", "", body)
+                body_clean = re.sub(r"/\*[\s\S]*?\*/", "", body_clean).strip()
+                if not body_clean:
+                    violations.append(f"{jf.name}: {match.group(0)}")
+
+        assert not violations, f"Found empty catch block(s) in JSX files: {violations}"
+
+    def test_glyph_coverage_error_mapping(self):
+        """Verify com_supervisor maps GlyphCoverageError message to typed exception."""
+        from app.automation.com_supervisor import _raise_typed_error
+        from app.core.exceptions import GlyphCoverageError
+
+        with pytest.raises(GlyphCoverageError) as exc_info:
+            _raise_typed_error("GlyphCoverageError: expected 16 Greek/math characters to be styled, but changeGrep styled 0.")
+        assert "GlyphCoverageError" in str(exc_info.value)
+
+    def test_master_spread_body_frame_bounds_calculation(self):
+        """Verify body frame geometricBounds match expected x0/x1 values for Page 1 and Page 2 (STEP-7.1g)."""
+        p_width = 595.28
+        p_height = 841.89
+        m_top = 20.0 * 2.83465
+        m_bottom = 20.0 * 2.83465
+        m_inside = 22.0 * 2.83465
+        m_outside = 15.0 * 2.83465
+
+        body_top = m_top + 6
+        body_bottom = p_height - m_bottom - 6
+
+        # Page 1 (LEFT_HAND under RTL binding)
+        page1_left = m_outside
+        page1_right = p_width - m_inside
+        assert round(page1_left, 2) == 42.52
+        assert round(page1_right, 2) == 532.92
+
+        # Page 2 (RIGHT_HAND under RTL binding)
+        page2_left = m_inside
+        page2_right = p_width - m_outside
+        assert round(page2_left, 2) == 62.36
+        assert round(page2_right, 2) == 552.76

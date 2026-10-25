@@ -83,6 +83,11 @@ if (typeof resolveAndApplyStyle === "undefined") {
 }
 
 
+// ─── STEP-7.1g Glyph Coverage Constants ─────────────────────────────────
+var GREEK_MATH_GREP_PATTERN = "[\\x{0370}-\\x{03FF}\\x{2070}-\\x{209F}\\x{2200}-\\x{22FF}\\x{2190}-\\x{21FF}]";
+var GREEK_MATH_JS_REGEX = /[\u0370-\u03FF\u2070-\u209F\u2200-\u22FF\u2190-\u21FF]/g;
+
+
 // ─── Imposition Multiples (Unified with pricing_engine.IMPOSITION_MULTIPLE) ──
 
 var IMPOSITION_MULTIPLE_MAP = {
@@ -157,34 +162,6 @@ function ensureFrameCapacity(doc, currentFrame, masterName) {
         var masterBodyFrame = findMasterFrameByLabelOnSide(
             newPage.appliedMaster, "Booklet_Body_Story", newPage.side
         );
-
-        // Apply marginPreferences matching body frame (STEP-7.1e)
-        try {
-            var mgb = masterBodyFrame.geometricBounds;
-            var npBounds = newPage.bounds;
-            var npWidth = npBounds[3] - npBounds[1];
-            var npHeight = npBounds[2] - npBounds[0];
-            var npTop = mgb[0];
-            var npLeft = mgb[1];
-            var npBottom = npHeight - mgb[2];
-            var npRight = npWidth - mgb[3];
-            try {
-                newPage.marginPreferences.properties = {
-                    top: npTop,
-                    bottom: npBottom,
-                    left: npLeft,
-                    right: npRight,
-                    columnCount: 1,
-                    columnGutter: 0
-                };
-            } catch (eMargProp) {
-                newPage.marginPreferences.top = npTop;
-                newPage.marginPreferences.bottom = npBottom;
-                newPage.marginPreferences.left = npLeft;
-                newPage.marginPreferences.right = npRight;
-                newPage.marginPreferences.columnCount = 1;
-            }
-        } catch (eMarg) {}
 
         var newFrame = masterBodyFrame.override(newPage);
         newFrame.label = "Booklet_Body_Story";
@@ -438,18 +415,9 @@ function ensureAllStyles(doc, stylesCfg) {
     var arabicStylesForGrep = [baStyle, chStyle, mqStyle, liStyle, thStyle, tcStyle];
     for (var gIdx = 0; gIdx < arabicStylesForGrep.length; gIdx++) {
         var pStyle = arabicStylesForGrep[gIdx];
-        try {
-            var grepStyle = pStyle.nestedGrepStyles.add();
-            grepStyle.appliedCharacterStyle = greekCharStyle;
-            grepStyle.grepExpression = "[\\x{0370}-\\x{03FF}\\x{2200}-\\x{22FF}\\x{221A}]";
-        } catch (eGrep) {
-            try {
-                pStyle.nestedGrepStyles.add({
-                    appliedCharacterStyle: greekCharStyle,
-                    grepExpression: "[\\x{0370}-\\x{03FF}\\x{2200}-\\x{22FF}\\x{221A}]"
-                });
-            } catch (eGrep2) {}
-        }
+        var grepStyle = pStyle.nestedGrepStyles.add();
+        grepStyle.appliedCharacterStyle = greekCharStyle;
+        grepStyle.grepExpression = GREEK_MATH_GREP_PATTERN;
     }
 
     return {
@@ -488,7 +456,7 @@ function getFrameUsableWidth(frame) {
     var frameWidth = gb[3] - gb[1];
     var leftInset = 0;
     var rightInset = 0;
-    try {
+    if (frame.textFramePreferences) {
         var insets = frame.textFramePreferences.insetSpacing;
         if (typeof insets === "number") {
             leftInset = insets;
@@ -502,7 +470,7 @@ function getFrameUsableWidth(frame) {
                 rightInset = insets[0];
             }
         }
-    } catch (eInsets) {}
+    }
     var usable = frameWidth - leftInset - rightInset;
     return (usable > 0) ? usable : frameWidth;
 }
@@ -593,34 +561,6 @@ function generateBookletMain() {
             firstPage.appliedMaster, "Booklet_Body_Story", firstPage.side
         );
 
-        // Apply marginPreferences matching body frame (STEP-7.1e)
-        try {
-            var mgbFirst = masterBodyFrame.geometricBounds;
-            var fpBounds = firstPage.bounds;
-            var fpWidth = fpBounds[3] - fpBounds[1];
-            var fpHeight = fpBounds[2] - fpBounds[0];
-            var fpTop = mgbFirst[0];
-            var fpLeft = mgbFirst[1];
-            var fpBottom = fpHeight - mgbFirst[2];
-            var fpRight = fpWidth - mgbFirst[3];
-            try {
-                firstPage.marginPreferences.properties = {
-                    top: fpTop,
-                    bottom: fpBottom,
-                    left: fpLeft,
-                    right: fpRight,
-                    columnCount: 1,
-                    columnGutter: 0
-                };
-            } catch (eFPProp) {
-                firstPage.marginPreferences.top = fpTop;
-                firstPage.marginPreferences.bottom = fpBottom;
-                firstPage.marginPreferences.left = fpLeft;
-                firstPage.marginPreferences.right = fpRight;
-                firstPage.marginPreferences.columnCount = 1;
-            }
-        } catch (eFPMarg) {}
-
         var currentFrame = masterBodyFrame.override(firstPage);
         currentFrame.label = "Booklet_Body_Story";
         var story = currentFrame.parentStory;
@@ -702,6 +642,63 @@ function generateBookletMain() {
             story = currentFrame.parentStory;
         }
 
+        // ── 9b. Deterministic Greek/Math Glyph Styling via changeGrep (STEP-7.1g) ──
+        var GreekMathChar = styles.greekMathCharStyle || doc.characterStyles.itemByName("GreekMathChar");
+        if (typeof NothingEnum === "undefined") {
+            var NothingEnum = { NOTHING: null };
+        }
+        app.findGrepPreferences = NothingEnum.NOTHING;
+        app.changeGrepPreferences = NothingEnum.NOTHING;
+        app.findGrepPreferences.findWhat = GREEK_MATH_GREP_PATTERN;
+        app.changeGrepPreferences.appliedCharacterStyle = GreekMathChar;
+        var changedGrepResults = doc.changeGrep();
+        var greekCharsStyled = (changedGrepResults && typeof changedGrepResults.length === "number") ? changedGrepResults.length : 0;
+        app.findGrepPreferences = NothingEnum.NOTHING;
+        app.changeGrepPreferences = NothingEnum.NOTHING;
+
+        // Count expected Greek/Math characters from payload items
+        var greekCharsExpected = 0;
+        for (var itIdx = 0; itIdx < items.length; itIdx++) {
+            var it = items[itIdx];
+            if (it.raw_content && typeof it.raw_content === "string") {
+                var m = it.raw_content.match(GREEK_MATH_JS_REGEX);
+                if (m) greekCharsExpected += m.length;
+            }
+            if (it.headers && it.headers.length) {
+                for (var hi = 0; hi < it.headers.length; hi++) {
+                    var mh = String(it.headers[hi]).match(GREEK_MATH_JS_REGEX);
+                    if (mh) greekCharsExpected += mh.length;
+                }
+            }
+            if (it.rows && it.rows.length) {
+                for (var ri = 0; ri < it.rows.length; ri++) {
+                    var rw = it.rows[ri];
+                    if (rw && rw.length) {
+                        for (var ci = 0; ci < rw.length; ci++) {
+                            var mr = String(rw[ci]).match(GREEK_MATH_JS_REGEX);
+                            if (mr) greekCharsExpected += mr.length;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (greekCharsExpected > 0 && greekCharsStyled === 0) {
+            throw new Error(
+                "GlyphCoverageError: expected " + greekCharsExpected +
+                " Greek/math characters to be styled, but changeGrep styled 0."
+            );
+        }
+
+        var assignedFontName = "";
+        if (GreekMathChar && GreekMathChar.appliedFont) {
+            if (typeof GreekMathChar.appliedFont.name !== "undefined") {
+                assignedFontName = GreekMathChar.appliedFont.name;
+            } else {
+                assignedFontName = String(GreekMathChar.appliedFont);
+            }
+        }
+
         // ── 10. Dynamic Imposition from ACTUAL InDesign Page Count ──────
         var actualPageCount = doc.pages.count();
         var bindingMethod = payload.binding || "saddle_stitch";
@@ -755,13 +752,11 @@ function generateBookletMain() {
                 if (tf.label === "Booklet_Body_Story") {
                     bBounds = tf.geometricBounds;
                 }
-                try {
-                    if (tf.tables && tf.tables.count() > 0) {
-                        for (var tbIdx = 0; tbIdx < tf.tables.count(); tbIdx++) {
-                            pageTableWidths.push(tf.tables.item(tbIdx).width);
-                        }
+                if (tf.tables && tf.tables.count() > 0) {
+                    for (var tbIdx = 0; tbIdx < tf.tables.count(); tbIdx++) {
+                        pageTableWidths.push(tf.tables.item(tbIdx).width);
                     }
-                } catch (eTbl) {}
+                }
             }
 
             // Fallback for filler pages without body frame override
@@ -771,16 +766,16 @@ function generateBookletMain() {
                     if (mbf && mbf.isValid) {
                         bBounds = mbf.geometricBounds;
                     }
-                } catch (eMbf) {}
+                } catch (eMbf) {
+                    bBounds = null;
+                }
             }
 
             var pageNum = p + 1;
-            try {
-                if (pg.name) {
-                    var parsed = parseInt(pg.name, 10);
-                    if (!isNaN(parsed)) pageNum = parsed;
-                }
-            } catch (ePn) {}
+            if (pg.name) {
+                var parsed = parseInt(pg.name, 10);
+                if (!isNaN(parsed)) pageNum = parsed;
+            }
 
             pageDiagnostics.push({
                 page_number: pageNum,
@@ -799,6 +794,9 @@ function generateBookletMain() {
             actual_page_count: actualPageCount,
             imposed_page_count: imposedPageCount,
             composer_ok: true,
+            greek_chars_styled: greekCharsStyled,
+            greek_chars_expected: greekCharsExpected,
+            greek_char_font: assignedFontName,
             output_indd: inddPath,
             output_pdf: pdfPath,
             pages: pageDiagnostics,
@@ -824,7 +822,9 @@ function generateBookletMain() {
         if (resultPath) {
             try {
                 writeResultToFile(resultPath, errorResult);
-            } catch (eWrite) {}
+            } catch (eWrite) {
+                warnings.push("Failed to write error result: " + eWrite.message);
+            }
         }
         throw err;
     } finally {
@@ -833,7 +833,7 @@ function generateBookletMain() {
             try {
                 doc.close(SaveOptions.NO);
             } catch (eClose) {
-                // Ignore close error if already dismissed or closed
+                warnings.push("Failed to close document: " + eClose.message);
             }
         }
     }
