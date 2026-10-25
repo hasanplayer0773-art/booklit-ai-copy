@@ -88,9 +88,7 @@ if (typeof resolveAndApplyStyle === "undefined") {
 var IMPOSITION_MULTIPLE_MAP = {
     "saddle_stitch": 4,
     "perfect_bound": 1,
-    "spiral":        1,
-    "perfect_bind":  2,
-    "wire":          2
+    "spiral":        1
 };
 
 function getImpositionMultiple(binding) {

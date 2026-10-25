@@ -507,6 +507,11 @@ class TestJSXScriptStaticContract:
         assert "requireMarginField(geometry.margins, \"outside_mm\")" in content
         # Dynamic imposition from actual page count & unified multiples
         assert "IMPOSITION_MULTIPLE_MAP" in content
+        assert '"saddle_stitch": 4' in content
+        assert '"perfect_bound": 1' in content
+        assert '"spiral":        1' in content
+        assert '"perfect_bind"' not in content
+        assert '"wire"' not in content
         assert "doc.close(SaveOptions.NO)" in content
         assert "composer_ok" in content
         assert "actual_page_count" in content
