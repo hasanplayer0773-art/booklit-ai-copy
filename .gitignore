@@ -1,0 +1,10 @@
+dist/
+build/
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.log
+src/assets/gtk_runtime/
+.pytest_cache/
+booklit ai copy/

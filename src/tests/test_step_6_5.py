@@ -287,16 +287,25 @@ class TestInDesignIndependence:
 
     def test_all_semantic_block_types_handled(self, tmp_path):
         """Ensure all block types render cleanly without error."""
+        from typing import get_args
+
         block_types: List[tuple[BlockType, str]] = [
             ("chapter_header", "عنوان الفصل الأول"),
             ("arabic_text", "فقرة نصية عربية عادية"),
             ("english_text", "Standard English paragraph"),
             ("ministry_question", "سؤال وزاري: ما هو ناتج 5 + 5؟"),
+            ("math_formula", "<math xmlns='http://www.w3.org/1998/Math/MathML'><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mn>1</mn></math>"),
             ("list_item", "عنصر من قائمة نقطية"),
             ("chemistry_formula", "2H2 + O2 -> 2H2O"),
             ("image_prompt", "صورة توضيحية للمسألة"),
             ("legacy_equation_placeholder", "EQ_OLD_REF_123"),
         ]
+
+        # Verify that all semantic types defined in BlockType are tested
+        all_defined_types = set(get_args(BlockType))
+        tested_types = {bt for bt, _ in block_types}
+        assert tested_types == all_defined_types, f"Missing block types: {all_defined_types - tested_types}"
+
         blocks = [
             make_block(f"b_{bt}", bt, text) for bt, text in block_types
         ]
