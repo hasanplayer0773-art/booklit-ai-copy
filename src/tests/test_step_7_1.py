@@ -622,9 +622,10 @@ class TestJSXScriptStaticContract:
         # 9b. Table width from geometricBounds
         assert "getFrameUsableWidth" in content
         assert "currentTableWidth = getFrameUsableWidth(currentFrame)" in content
-        # 9c. Explicit RTL page binding
-        assert "PageBindingOptions.RIGHT_TO_LEFT_BINDING" in content
-        assert "doc.documentPreferences.pageBinding = PageBindingOptions.RIGHT_TO_LEFT_BINDING" in content
+        # 9c. Explicit RTL page binding (STEP-7.1e / STEP-7.1f)
+        assert "PageBindingOptions.RIGHT_TO_LEFT" in content
+        assert "pageBinding = PageBindingOptions.RIGHT_TO_LEFT" in content
+        assert "RIGHT_TO_LEFT_BINDING" not in content
         # 9d. Margin preferences matching body frame
         assert "firstPage.marginPreferences" in content
         assert "newPage.marginPreferences" in content

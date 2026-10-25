@@ -554,21 +554,12 @@ function generateBookletMain() {
         // [y0, x0, y1, x1] bounds are strictly page-relative on both left and right master pages.
         doc.viewPreferences.rulerOrigin = RulerOrigin.PAGE_ORIGIN;
 
-        // Polyfill PageBindingOptions if needed (STEP-7.1e)
-        try {
-            if (typeof PageBindingOptions !== "undefined") {
-                if (typeof PageBindingOptions.RIGHT_TO_LEFT_BINDING === "undefined" && typeof PageBindingOptions.RIGHT_TO_LEFT !== "undefined") {
-                    PageBindingOptions.RIGHT_TO_LEFT_BINDING = PageBindingOptions.RIGHT_TO_LEFT;
-                }
-            }
-        } catch (ePoly) {}
-
         with (doc.documentPreferences) {
             pageHeight = geometry.height_pt + "pt";
             pageWidth = geometry.width_pt + "pt";
             facingPages = (geometry.facing_pages !== false);
             pagesPerDocument = 1;
-            pageBinding = PageBindingOptions.RIGHT_TO_LEFT_BINDING;
+            pageBinding = PageBindingOptions.RIGHT_TO_LEFT;
             if (typeof geometry.bleed_mm === "number" && geometry.bleed_mm > 0) {
                 var bleedPt = geometry.bleed_mm * 2.83465;
                 documentBleedTopOffset = bleedPt + "pt";
@@ -576,14 +567,6 @@ function generateBookletMain() {
                 documentBleedInsideOrLeftOffset = bleedPt + "pt";
                 documentBleedOutsideOrRightOffset = bleedPt + "pt";
             }
-        }
-
-        try {
-            doc.documentPreferences.pageBinding = PageBindingOptions.RIGHT_TO_LEFT_BINDING;
-        } catch (eBind) {
-            try {
-                doc.documentPreferences.pageBinding = PageBindingOptions.RIGHT_TO_LEFT;
-            } catch (eBind2) {}
         }
 
         // ── 5. Setup Palette Colors ─────────────────────────────────────
