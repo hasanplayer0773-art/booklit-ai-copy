@@ -66,6 +66,27 @@ def normalize_presentation_forms(text: str) -> str:
     return unicodedata.normalize("NFKC", text)
 
 
+def canonical_normalize_text(text: str) -> str:
+    """Normalize text through the canonical text integrity pipeline.
+
+    1. NFKC normalization (Presentation Forms → base characters)
+    2. NFC normalization (combining sequences → composed form)
+    3. Strip invisible control characters (BOM, ZWS, bidi marks)
+    4. Normalize line breaks (\r\n, \r → \n)
+    5. Strip leading/trailing whitespace per line
+    6. Collapse horizontal whitespace (tabs, multiple spaces → single space)
+
+    Returns:
+        Canonical text string.
+    """
+    depresented = normalize_presentation_forms(text)
+    normalized = unicodedata.normalize("NFC", depresented)
+    cleaned = STRIP_CONTROL_CHARS_REGEX.sub("", normalized)
+    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = "\n".join(line.strip() for line in cleaned.split("\n"))
+    return re.sub(r"[ \t]+", " ", cleaned).strip()
+
+
 def compute_canonical_hash(text: str) -> str:
     """Compute a canonical SHA-256 hash of Arabic text content.
 
@@ -88,25 +109,7 @@ def compute_canonical_hash(text: str) -> str:
     Returns:
         Lowercase hex SHA-256 digest string.
     """
-    # Step 1: Presentation Forms → base characters
-    depresented = normalize_presentation_forms(text)
-
-    # Step 2: NFC normalization
-    normalized = unicodedata.normalize("NFC", depresented)
-
-    # Step 3: Strip invisible control characters only
-    cleaned = STRIP_CONTROL_CHARS_REGEX.sub("", normalized)
-
-    # Step 4: Normalize line breaks
-    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
-
-    # Step 5: Strip leading/trailing whitespace per line
-    cleaned = "\n".join(line.strip() for line in cleaned.split("\n"))
-
-    # Step 6: Collapse horizontal whitespace
-    cleaned = re.sub(r"[ \t]+", " ", cleaned).strip()
-
-    # Step 7: SHA-256
+    cleaned = canonical_normalize_text(text)
     return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()
 
 

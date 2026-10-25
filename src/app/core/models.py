@@ -184,3 +184,5 @@ class BookletDocument(BaseModel):
     pages: List[PageData] = Field(default_factory=list)
     document_content_hash: Optional[str] = None
     source_sha256: Optional[str] = None
+    warnings: List[str] = Field(default_factory=list)
+    audit_rows: List[Dict[str, Any]] = Field(default_factory=list)

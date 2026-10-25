@@ -387,11 +387,13 @@ function ensureAllStyles(doc, stylesCfg) {
     });
     applyFontSafe(rfStyle, bodyFont);
 
+    var paperColor = doc.swatches.itemByName("Paper");
     var thStyle = getOrCreateParagraphStyle(doc, "TableHeaderStyle", {
         pointSize: stylesCfg.table_header_size_pt || 10.5,
         leading: 14.0,
         paragraphDirection: rtlDirection,
-        composer: wrComposer
+        composer: wrComposer,
+        fillColor: (paperColor && paperColor.isValid) ? paperColor : "Paper"
     });
     applyFontSafe(thStyle, bodyFont);
 

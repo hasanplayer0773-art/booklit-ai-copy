@@ -23,7 +23,7 @@ import re
 import tempfile
 import uuid
 import zipfile
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import lxml.etree as ET
 from docx import Document as DocxDocument
@@ -71,6 +71,12 @@ W_PICT = f'{{{NSMAP["w"]}}}pict'
 M_OMATH = f'{{{NSMAP["m"]}}}oMath'
 M_OMATHPARA = f'{{{NSMAP["m"]}}}oMathPara'
 V_SHAPE = f'{{{NSMAP["v"]}}}shape'
+W_TBLPR = f'{{{NSMAP["w"]}}}tblPr'
+W_BIDIVISUAL = f'{{{NSMAP["w"]}}}bidiVisual'
+W_GRIDSPAN = f'{{{NSMAP["w"]}}}gridSpan'
+W_VMERGE = f'{{{NSMAP["w"]}}}vMerge'
+W_BR = f'{{{NSMAP["w"]}}}br'
+W_SECTPR = f'{{{NSMAP["w"]}}}sectPr'
 
 # Drawing / image extraction tag paths
 WP_EXTENT = f'{{{NSMAP["wp"]}}}extent'
@@ -421,6 +427,8 @@ class DocxContentExtractor:
         )
         self._current_doc_part = None
         self._current_docx_path = None
+        self.warnings: List[str] = []
+        self.audit_rows: List[Dict[str, Any]] = []
         os.makedirs(self._job_temp_dir, exist_ok=True)
 
         # Try to initialize math extractor — record error but don't fail
@@ -448,6 +456,8 @@ class DocxContentExtractor:
             raise FileNotFoundError(f"DOCX file not found: {docx_path}")
 
         self._current_docx_path = os.path.abspath(docx_path)
+        self.warnings = []
+        self.audit_rows = []
         doc = DocxDocument(docx_path)
         self._current_doc_part = doc.part
         body_xml = doc.element.body
@@ -458,15 +468,34 @@ class DocxContentExtractor:
         table_counter = 0
 
         # Walk body children in document order
-        for child in body_xml:
+        for child_idx, child in enumerate(body_xml):
             tag = child.tag
+
+            if tag == W_SECTPR:
+                continue
 
             if tag == W_P:
                 # Paragraph — may contain text, math, chemistry, or OLE
+                p_text = "".join(t.text for t in child.iter(W_T) if t.text)
+                math_inside = child.findall(f".//{M_OMATH}") + child.findall(f".//{M_OMATHPARA}")
+                has_content = bool(p_text.strip() or math_inside)
+                br_count = len(child.findall(f".//{W_BR}"))
+
                 new_blocks = self._extract_paragraph(child, block_counter)
+                produced_ids = [b.block_id for b in new_blocks]
                 for b in new_blocks:
                     blocks.append(b)
                     block_counter += 1
+
+                audit_row = {
+                    "index": child_idx,
+                    "element_type": "paragraph",
+                    "preview": p_text[:40],
+                    "is_empty": not has_content,
+                    "br_count": br_count,
+                    "blocks": produced_ids if produced_ids else ("NO BLOCK" if has_content else []),
+                }
+                self.audit_rows.append(audit_row)
 
             elif tag == W_TBL:
                 # Table
@@ -474,19 +503,70 @@ class DocxContentExtractor:
                 tbl = self._extract_table(child, table_counter)
                 tables.append(tbl)
 
+                tbl_pr = child.find(W_TBLPR)
+                has_bidi = False
+                if tbl_pr is not None:
+                    bv = tbl_pr.find(W_BIDIVISUAL)
+                    if bv is not None:
+                        val = bv.get(f'{{{NSMAP["w"]}}}val', "1").lower()
+                        if val not in ("0", "false", "off"):
+                            has_bidi = True
+
+                has_merged = (
+                    child.find(f".//{W_GRIDSPAN}") is not None
+                    or child.find(f".//{W_VMERGE}") is not None
+                )
+
+                n_rows = len(tbl.rows) + (1 if tbl.headers else 0)
+                n_cols = len(tbl.headers) if tbl.headers else (len(tbl.rows[0]) if tbl.rows else 0)
+
+                audit_row = {
+                    "index": child_idx,
+                    "element_type": "table",
+                    "preview": f"{n_rows}x{n_cols}",
+                    "rows": n_rows,
+                    "cols": n_cols,
+                    "has_bidi_visual": "yes" if has_bidi else "no",
+                    "has_merged": "yes" if has_merged else "no",
+                    "table_id": tbl.table_id,
+                }
+                self.audit_rows.append(audit_row)
+
             elif tag == W_DRAWING or tag == W_PICT:
                 # Drawing/image at body level (STEP-6.4)
                 img_blocks = self._extract_images_from_element(child, block_counter)
+                produced_ids = [b.block_id for b in img_blocks]
                 for b in img_blocks:
                     blocks.append(b)
                     block_counter += 1
 
+                audit_row = {
+                    "index": child_idx,
+                    "element_type": "drawing",
+                    "preview": "drawing",
+                    "is_empty": False,
+                    "br_count": 0,
+                    "blocks": produced_ids if produced_ids else "NO BLOCK",
+                }
+                self.audit_rows.append(audit_row)
+
             else:
                 # Check for OLE objects at body level
                 ole_blocks = self._detect_ole_objects(child, block_counter)
+                produced_ids = [b.block_id for b in ole_blocks]
                 for b in ole_blocks:
                     blocks.append(b)
                     block_counter += 1
+
+                audit_row = {
+                    "index": child_idx,
+                    "element_type": "other",
+                    "preview": ET.QName(child).localname,
+                    "is_empty": not bool(produced_ids),
+                    "br_count": 0,
+                    "blocks": produced_ids if produced_ids else [],
+                }
+                self.audit_rows.append(audit_row)
 
         # Build document
         doc_id = str(uuid.uuid4())
@@ -503,6 +583,8 @@ class DocxContentExtractor:
             file_path=os.path.abspath(docx_path),
             file_type="docx",
             pages=[page],
+            warnings=list(self.warnings),
+            audit_rows=list(self.audit_rows),
         )
 
     def _extract_paragraph(
@@ -539,10 +621,21 @@ class DocxContentExtractor:
                     idx += 1
                 return blocks
 
-        # Second pass: walk children sequentially, grouping runs and
-        # detecting inline math/OLE
+        # Second pass: walk children sequentially, handling line breaks and grouping runs
         text_runs: List[ET._Element] = []
         pending_text_parts: List[str] = []
+
+        def flush_segment():
+            nonlocal idx
+            if pending_text_parts:
+                chem_blocks = self._flush_runs_as_content(
+                    text_runs, pending_text_parts, heading_level, idx
+                )
+                for b in chem_blocks:
+                    blocks.append(b)
+                    idx += 1
+                text_runs.clear()
+                pending_text_parts.clear()
 
         for child in children:
             if child.tag == W_PPR:
@@ -551,95 +644,91 @@ class DocxContentExtractor:
 
             elif child.tag == M_OMATH:
                 # Inline math — flush any pending text first
-                if text_runs:
-                    chem_blocks = self._flush_runs_as_content(
-                        text_runs, pending_text_parts, heading_level, idx
-                    )
-                    for b in chem_blocks:
-                        blocks.append(b)
-                        idx += 1
-                    text_runs = []
-                    pending_text_parts = []
-
+                flush_segment()
                 block = self._convert_omath_block(child, idx)
                 blocks.append(block)
                 idx += 1
 
             elif child.tag == W_OBJECT:
                 # OLE object — flush text, emit placeholder
-                if text_runs:
-                    chem_blocks = self._flush_runs_as_content(
-                        text_runs, pending_text_parts, heading_level, idx
-                    )
-                    for b in chem_blocks:
-                        blocks.append(b)
-                        idx += 1
-                    text_runs = []
-                    pending_text_parts = []
-
+                flush_segment()
                 block = self._make_ole_placeholder(child, idx)
                 blocks.append(block)
                 idx += 1
 
             elif child.tag == W_DRAWING or child.tag == W_PICT:
                 # Drawing / picture element directly under paragraph (STEP-6.4)
-                if text_runs:
-                    chem_blocks = self._flush_runs_as_content(
-                        text_runs, pending_text_parts, heading_level, idx
-                    )
-                    for b in chem_blocks:
-                        blocks.append(b)
-                        idx += 1
-                    text_runs = []
-                    pending_text_parts = []
-
+                flush_segment()
                 img_blocks = self._extract_images_from_element(child, idx)
                 for b in img_blocks:
                     blocks.append(b)
                     idx += 1
 
+            elif child.tag == W_BR:
+                br_type = child.get(f'{{{NSMAP["w"]}}}type')
+                if br_type in ("page", "column"):
+                    self.warnings.append("PAGE_BREAK_IGNORED")
+                else:
+                    flush_segment()
+
             elif child.tag == W_R:
                 # Check if this run contains an OLE object (w:object)
                 ole_inside = child.find(W_OBJECT)
                 if ole_inside is not None:
-                    # OLE object inside a run — flush text, emit placeholder
-                    if text_runs:
-                        chem_blocks = self._flush_runs_as_content(
-                            text_runs, pending_text_parts, heading_level, idx
-                        )
-                        for b in chem_blocks:
-                            blocks.append(b)
-                            idx += 1
-                        text_runs = []
-                        pending_text_parts = []
-
+                    flush_segment()
                     block = self._make_ole_placeholder(ole_inside, idx)
                     blocks.append(block)
                     idx += 1
-                else:
-                    # Check for drawings / pict inside run (STEP-6.4)
-                    drawings = child.findall(f".//{W_DRAWING}") + child.findall(f".//{W_PICT}")
-                    if drawings:
-                        if text_runs:
-                            chem_blocks = self._flush_runs_as_content(
-                                text_runs, pending_text_parts, heading_level, idx
-                            )
-                            for b in chem_blocks:
-                                blocks.append(b)
-                                idx += 1
-                            text_runs = []
-                            pending_text_parts = []
+                    continue
 
-                        for draw_elem in drawings:
-                            img_blocks = self._extract_images_from_element(draw_elem, idx)
+                # Check for drawings / pict inside run (STEP-6.4)
+                drawings = child.findall(f".//{W_DRAWING}") + child.findall(f".//{W_PICT}")
+                if drawings:
+                    flush_segment()
+                    for draw_elem in drawings:
+                        img_blocks = self._extract_images_from_element(draw_elem, idx)
+                        for b in img_blocks:
+                            blocks.append(b)
+                            idx += 1
+                    continue
+
+                br_inside = child.findall(f".//{W_BR}")
+                if not br_inside:
+                    text_runs.append(child)
+                    run_text = _get_run_text(child)
+                    if run_text:
+                        pending_text_parts.append(run_text)
+                else:
+                    # Run has <w:br> inside it. Process run elements sequentially.
+                    rpr = child.find(W_RPR)
+                    for r_child in child:
+                        if r_child.tag == W_T:
+                            t_text = r_child.text or ""
+                            if t_text:
+                                sub_r = ET.Element(W_R)
+                                if rpr is not None:
+                                    sub_r.append(ET.fromstring(ET.tostring(rpr)))
+                                sub_t = ET.SubElement(sub_r, W_T)
+                                sub_t.text = t_text
+                                text_runs.append(sub_r)
+                                pending_text_parts.append(t_text)
+                        elif r_child.tag == W_BR:
+                            br_type = r_child.get(f'{{{NSMAP["w"]}}}type')
+                            if br_type in ("page", "column"):
+                                self.warnings.append("PAGE_BREAK_IGNORED")
+                            else:
+                                flush_segment()
+                        elif r_child.tag == W_DRAWING or r_child.tag == W_PICT:
+                            flush_segment()
+                            img_blocks = self._extract_images_from_element(r_child, idx)
                             for b in img_blocks:
                                 blocks.append(b)
                                 idx += 1
-                    else:
-                        text_runs.append(child)
-                        run_text = _get_run_text(child)
-                        if run_text:
-                            pending_text_parts.append(run_text)
+                        elif r_child.tag == W_OBJECT:
+                            flush_segment()
+                            block = self._make_ole_placeholder(r_child, idx)
+                            blocks.append(block)
+                            idx += 1
 
             else:
                 # Check for v:shape or other OLE indicators inside
@@ -647,29 +736,13 @@ class DocxContentExtractor:
                 shapes = child.findall(f".//{V_SHAPE}")
                 objects = child.findall(f".//{W_OBJECT}")
                 if shapes or objects:
-                    if text_runs:
-                        chem_blocks = self._flush_runs_as_content(
-                            text_runs, pending_text_parts, heading_level, idx
-                        )
-                        for b in chem_blocks:
-                            blocks.append(b)
-                            idx += 1
-                        text_runs = []
-                        pending_text_parts = []
-
+                    flush_segment()
                     block = self._make_ole_placeholder(child, idx)
                     blocks.append(block)
                     idx += 1
 
         # Flush remaining runs
-        if text_runs:
-            chem_blocks = self._flush_runs_as_content(
-                text_runs, pending_text_parts, heading_level, idx
-            )
-            for b in chem_blocks:
-                blocks.append(b)
-                idx += 1
-
+        flush_segment()
         return blocks
 
     def _flush_runs_as_content(
@@ -695,8 +768,8 @@ class DocxContentExtractor:
         Returns:
             List of ContentBlock instances.
         """
-        full_text = "".join(text_parts).strip()
-        if not full_text:
+        full_text = "".join(text_parts)
+        if not full_text.strip():
             return []
 
         blocks: List[ContentBlock] = []
@@ -780,6 +853,9 @@ class DocxContentExtractor:
             )
 
         mathml = self._math_extractor.omml_to_mathml(omath_elem)
+
+        if mathml.startswith("<mml:math") or mathml.startswith("<math"):
+            self.warnings.append("MATHML_NOT_RENDERABLE")
 
         return ContentBlock(
             block_id=f"blk_{idx:04d}",
@@ -972,6 +1048,20 @@ class DocxContentExtractor:
         Returns:
             TableData with headers and rows.
         """
+        tbl_pr = tbl_elem.find(W_TBLPR)
+        has_bidi = False
+        if tbl_pr is not None:
+            bv = tbl_pr.find(W_BIDIVISUAL)
+            if bv is not None:
+                val = bv.get(f'{{{NSMAP["w"]}}}val', "1").lower()
+                if val not in ("0", "false", "off"):
+                    has_bidi = True
+
+        has_merged = (
+            tbl_elem.find(f".//{W_GRIDSPAN}") is not None
+            or tbl_elem.find(f".//{W_VMERGE}") is not None
+        )
+
         rows_data: List[List[str]] = []
 
         for tr in tbl_elem.findall(W_TR):
@@ -985,6 +1075,12 @@ class DocxContentExtractor:
                         cell_texts.append(p_text)
                 row_cells.append("\n".join(cell_texts))
             rows_data.append(row_cells)
+
+        if has_merged:
+            self.warnings.append("MERGED_CELLS_NOT_SUPPORTED")
+        elif not has_bidi:
+            for row in rows_data:
+                row.reverse()
 
         # First row as headers, rest as data
         headers = rows_data[0] if rows_data else []

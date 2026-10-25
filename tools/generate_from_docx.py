@@ -54,7 +54,7 @@ from app.core.exceptions import (
     TextIntegrityError,
 )
 from app.core.models import BookletDocument, ContentBlock
-from app.core.text_integrity import verify_text_integrity
+from app.core.text_integrity import canonical_normalize_text, verify_text_integrity
 from app.utils.secrets_manager import SecretsManager
 
 logging.basicConfig(
@@ -114,6 +114,133 @@ def extract_document(
 
     elapsed = time.perf_counter() - t0
     return booklet_doc, source_counts, elapsed
+
+
+def run_coverage_audit(
+    docx_path: Union[str, Path],
+    booklet_doc: BookletDocument,
+    allow_loss: bool = False,
+) -> Tuple[List[Dict[str, Any]], List[str], bool]:
+    """Audit source .docx body elements against extracted BookletDocument.
+
+    1. Prints and returns one audit row per body element (w:p, w:tbl, drawings).
+    2. Runs text-coverage check: canonical concatenation of non-empty source text
+       vs output blocks + table cells.
+    3. Lists every source paragraph not found.
+    4. On loss adds warning TEXT_DROPPED and signals failure.
+
+    Returns:
+        Tuple of (audit_rows, audit_warnings, text_loss_detected).
+    """
+    p = Path(docx_path).resolve()
+    raw_doc = DocxDocument(str(p))
+
+    audit_rows = list(booklet_doc.audit_rows)
+    print("\n── Coverage Audit (Body Elements in Order) ──────────────────────────")
+    for row in audit_rows:
+        idx = row.get("index", 0)
+        elem_type = row.get("element_type", "")
+        if elem_type == "paragraph":
+            p_prev = row.get("preview", "")
+            emp = row.get("is_empty", False)
+            br = row.get("br_count", 0)
+            bl = row.get("blocks", [])
+            bl_str = bl if bl != [] else "(empty)"
+            print(f"  [AUDIT] Paragraph [{idx:02d}]: preview={repr(p_prev[:35])}, empty={emp}, br={br} -> {bl_str}")
+        elif elem_type == "table":
+            prev = row.get("preview", "")
+            bv = row.get("has_bidi_visual", "no")
+            mrg = row.get("has_merged", "no")
+            tid = row.get("table_id", "")
+            print(f"  [AUDIT] Table     [{idx:02d}]: {prev}, bidiVisual={bv}, merged={mrg} -> {tid}")
+        elif elem_type == "drawing":
+            bl = row.get("blocks", [])
+            print(f"  [AUDIT] Drawing   [{idx:02d}]: -> {bl}")
+        else:
+            prev = row.get("preview", "")
+            bl = row.get("blocks", [])
+            print(f"  [AUDIT] Element   [{idx:02d}] ({elem_type}): {prev} -> {bl}")
+
+    # ── Text Coverage Check ─────────────────────────────────────────────
+    source_paragraphs = [para for para in raw_doc.paragraphs if para.text.strip()]
+
+    out_text_blocks = [
+        b.raw_content
+        for page in booklet_doc.pages
+        for b in page.content_blocks
+        if b.block_type not in ("legacy_equation_placeholder", "image_asset", "math_formula")
+    ]
+    out_canonical_blocks = [canonical_normalize_text(b) for b in out_text_blocks]
+
+    missing_paragraphs: List[str] = []
+    for p_idx, para in enumerate(source_paragraphs):
+        lines = [line.strip() for line in para.text.split("\n") if line.strip()]
+        for line in lines:
+            c_line = canonical_normalize_text(line)
+            if not c_line:
+                continue
+            found = any(c_line in ob or ob in c_line for ob in out_canonical_blocks)
+            if not found:
+                for page in booklet_doc.pages:
+                    for t in page.tables:
+                        for row in [t.headers] + t.rows:
+                            for cell in row:
+                                if c_line in canonical_normalize_text(cell):
+                                    found = True
+                                    break
+            if not found:
+                missing_paragraphs.append(f"Paragraph {p_idx}: {repr(line[:40])}")
+
+    src_items: List[str] = []
+    for para in source_paragraphs:
+        for line in para.text.split("\n"):
+            cl = canonical_normalize_text(line)
+            if cl:
+                src_items.append(cl)
+    for t in raw_doc.tables:
+        for row in t.rows:
+            for cell in row.cells:
+                cc = canonical_normalize_text(cell.text)
+                if cc:
+                    src_items.append(cc)
+
+    out_items: List[str] = []
+    for page in booklet_doc.pages:
+        for b in page.content_blocks:
+            if b.block_type not in ("legacy_equation_placeholder", "image_asset", "math_formula"):
+                cb = canonical_normalize_text(b.raw_content)
+                if cb:
+                    out_items.append(cb)
+        for t in page.tables:
+            for h in t.headers:
+                ch = canonical_normalize_text(h)
+                if ch:
+                    out_items.append(ch)
+            for r in t.rows:
+                for c in r:
+                    cr = canonical_normalize_text(c)
+                    if cr:
+                        out_items.append(cr)
+
+    src_canon = " ".join(sorted(src_items))
+    out_canon = " ".join(sorted(out_items))
+
+    text_loss = (src_canon != out_canon) or bool(missing_paragraphs)
+    audit_warnings: List[str] = []
+
+    print("\n── Text Coverage Verification ───────────────────────────────────────")
+    if missing_paragraphs:
+        print(f"  [!] Missing source paragraphs ({len(missing_paragraphs)}):")
+        for m in missing_paragraphs:
+            print(f"      * {m}")
+
+    if text_loss:
+        audit_warnings.append("TEXT_DROPPED")
+        print("  [✗] Text-coverage check FAILED: TEXT_DROPPED (source text dropped)")
+    else:
+        print("  [✓] Text-coverage check PASSED: 100% source text preserved (0 characters lost)")
+
+    return audit_rows, audit_warnings, text_loss
 
 
 def classify_document(
@@ -253,6 +380,7 @@ def build_report(
         "final_page_count": final_page_count,
         "per_page_diagnostics": per_page_diagnostics,
         "warnings": combined_warnings,
+        "coverage_audit": getattr(booklet_doc, "audit_rows", []),
         "timings": timings,
         "output_files": output_files or {},
     }
@@ -358,6 +486,7 @@ def run_pipeline(
     footer_text: Optional[str] = None,
     no_ai: bool = False,
     build_only: bool = False,
+    allow_loss: bool = False,
 ) -> int:
     """Execute the end-to-end extraction, classification, and InDesign generation pipeline.
 
@@ -368,6 +497,7 @@ def run_pipeline(
         footer_text: Optional footer text prefix.
         no_ai: If True, force offline RuleBasedClassifier.
         build_only: If True, stop after payload creation without executing InDesign.
+        allow_loss: If True, do not exit non-zero on text loss.
 
     Returns:
         Exit code: 0 on success, non-zero on error.
@@ -385,9 +515,23 @@ def run_pipeline(
             f"({extract_time:.3f}s)"
         )
 
+        # ── Stage 1b: Coverage Audit & Text Integrity Check ─────────────
+        pipeline_warnings: List[str] = list(booklet_doc.warnings)
+        audit_rows, audit_warnings, text_loss = run_coverage_audit(
+            docx_file, booklet_doc, allow_loss=allow_loss
+        )
+        pipeline_warnings.extend(audit_warnings)
+
+        if text_loss and not allow_loss:
+            print(f"\n[✗] Pipeline aborted: text loss detected (TEXT_DROPPED).")
+            print(f"    Pass --allow-loss to proceed anyway.")
+            print(f"[!] Real warnings count: {len(pipeline_warnings)}")
+            return 1
+
         # ── Stage 2: Classification ─────────────────────────────────────
         print(f"[+] Stage 2: Classifying blocks (mode: {'RuleBasedClassifier' if no_ai else 'AI with fallback'})...")
-        booklet_doc, pipeline_warnings, classify_time = classify_document(booklet_doc, no_ai=no_ai)
+        booklet_doc, class_warnings, classify_time = classify_document(booklet_doc, no_ai=no_ai)
+        pipeline_warnings.extend(class_warnings)
         print(f"[✓] Classified {len(booklet_doc.pages[0].content_blocks)} blocks ({classify_time:.3f}s)")
 
         # ── Stage 3: Geometry, Styles & Payload Build ───────────────────
@@ -475,6 +619,7 @@ def run_pipeline(
 
         # Print human-readable report
         print("\n" + format_report_text(report))
+        print(f"\n[!] Real warnings count: {len(report.get('warnings', []))}")
         print(f"[✓] Report saved to: {report_file}")
         return 0
 
@@ -532,6 +677,11 @@ def main() -> int:
         action="store_true",
         help="Build payload and report without executing InDesign COM job (for offline testing)",
     )
+    parser.add_argument(
+        "--allow-loss",
+        action="store_true",
+        help="Allow text loss without failing exit code (default: exit non-zero on text loss)",
+    )
 
     args = parser.parse_args()
     return run_pipeline(
@@ -541,6 +691,7 @@ def main() -> int:
         footer_text=args.footer_text,
         no_ai=args.no_ai,
         build_only=args.build_only,
+        allow_loss=args.allow_loss,
     )
 
 

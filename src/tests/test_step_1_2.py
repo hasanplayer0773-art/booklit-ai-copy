@@ -199,12 +199,13 @@ def _make_omathpara_xml(content_text: str = "a^2+b^2=c^2") -> str:
     </w:p>"""
 
 
-def _make_table_xml(headers: list, rows: list) -> str:
+def _make_table_xml(headers: list, rows: list, bidi: bool = True) -> str:
     """Create a w:tbl element XML.
 
     Args:
         headers: List of header cell strings.
         rows: List of rows, each a list of cell strings.
+        bidi: Whether table has bidiVisual (default True for Arabic).
 
     Returns:
         XML string for a w:tbl element.
@@ -223,8 +224,9 @@ def _make_table_xml(headers: list, rows: list) -> str:
 
     header_row = make_row(headers)
     data_rows = "".join(make_row(row) for row in rows)
+    bidi_xml = "<w:tblPr><w:bidiVisual/></w:tblPr>" if bidi else ""
 
-    return f"<w:tbl>{header_row}{data_rows}</w:tbl>"
+    return f"<w:tbl>{bidi_xml}{header_row}{data_rows}</w:tbl>"
 
 
 def _make_ole_object_xml(prog_id: str = "Equation.3") -> str:
