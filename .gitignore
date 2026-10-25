@@ -7,3 +7,5 @@ venv/
 *.log
 src/assets/gtk_runtime/
 .pytest_cache/
+samples/
+src/assets/xslt/OMML2MML.XSL
