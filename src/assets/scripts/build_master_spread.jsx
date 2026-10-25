@@ -91,9 +91,11 @@ function setupMasterSpread(doc, docCfg, colors, styles) {
     var MM_TO_PT = 2.83465;
     var MIN_TOP_MARGIN_MM = 12.0;
 
-    // ── 0. Acquire the first master spread and rename it ──
+    // ── 0. Acquire the first master spread and configure prefix/baseName ──
+    // MasterSpread.name is read-only in InDesign (composed of namePrefix + "-" + baseName)
     var master = doc.masterSpreads.item(0);
-    master.name = "Booklet_Master";
+    master.namePrefix = "B";
+    master.baseName = "Booklet_Master";
 
     // ── 1. Define Running Header Text Variable ──
     // Links to the chapter title paragraph style so the header
@@ -266,6 +268,42 @@ function setupMasterSpread(doc, docCfg, colors, styles) {
 }
 
 
+// ─── Master Spread Resolver ───────────────────────────────────────────
+
+/**
+ * Retrieve the master spread whose baseName === "Booklet_Master".
+ *
+ * In InDesign, MasterSpread.name is read-only and composed of namePrefix + "-" + baseName
+ * (e.g. "B-Booklet_Master"). itemByName resolution must NOT be used because it
+ * fails or is unreliable across InDesign versions.
+ *
+ * @param {Document} doc - The active InDesign document.
+ * @param {string} [targetBaseName] - Optional baseName to match (defaults to "Booklet_Master").
+ * @returns {MasterSpread} The master spread whose baseName matches.
+ * @throws {Error} MasterNotFoundError if no matching master spread exists.
+ */
+function getBookletMaster(doc, targetBaseName) {
+    var expected = targetBaseName || "Booklet_Master";
+    if (expected.indexOf("-") !== -1) {
+        var parts = expected.split("-");
+        expected = parts.slice(1).join("-");
+    }
+    var count = (typeof doc.masterSpreads.count === "function") ?
+        doc.masterSpreads.count() :
+        (doc.masterSpreads.length || 0);
+    for (var i = 0; i < count; i++) {
+        var ms = doc.masterSpreads.item(i);
+        if (ms && ms.baseName === expected) {
+            return ms;
+        }
+    }
+    throw new Error(
+        "MasterNotFoundError: master spread with baseName '" + expected +
+        "' not found in document."
+    );
+}
+
+
 // ─── Filler Page Insertion ────────────────────────────────────────────
 
 /**
@@ -287,7 +325,7 @@ function setupMasterSpread(doc, docCfg, colors, styles) {
  * @param {Document} doc - The active InDesign document.
  * @param {number} targetPageCount - The imposed page count target.
  * @param {string} masterName - Name of the master spread to apply
- *     (always "Booklet_Master" in normal operation).
+ *     (kept for backward compatibility; resolved via getBookletMaster by baseName).
  * @throws {Error} ContentExceedsEstimateError if actual > target.
  * @throws {Error} FillerPageMismatchError if insertion loop fails.
  */
@@ -311,7 +349,7 @@ function addBlankFillerPages(doc, targetPageCount, masterName) {
     while (currentCount < targetPageCount) {
         var lastPage = doc.pages.item(-1);
         var newPage = doc.pages.add(LocationOptions.AFTER, lastPage);
-        newPage.appliedMaster = doc.masterSpreads.itemByName(masterName);
+        newPage.appliedMaster = getBookletMaster(doc);
         // Filler pages carry no body-frame override — no injected body
         // content appears. The header ribbon, footer ribbon, and
         // AUTO_PAGE_NUMBER are inherited automatically from the master

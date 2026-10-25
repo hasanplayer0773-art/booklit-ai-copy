@@ -145,7 +145,7 @@ function ensureFrameCapacity(doc, currentFrame, masterName) {
     var guard = 0;
     while (currentFrame.overflows && guard < MAX_PAGES_SAFETY) {
         var newPage = doc.pages.add(LocationOptions.AFTER, currentFrame.parentPage);
-        newPage.appliedMaster = doc.masterSpreads.itemByName(masterName);
+        newPage.appliedMaster = getBookletMaster(doc);
 
         // Locate the labeled master body frame ON THE SAME SIDE as the
         // new page, then override it to get an editable, page-level
@@ -492,7 +492,7 @@ function generateBookletMain() {
 
         // ── 8. Initialize First Page Body Frame ─────────────────────────
         var firstPage = doc.pages.item(0);
-        firstPage.appliedMaster = doc.masterSpreads.itemByName("Booklet_Master");
+        firstPage.appliedMaster = getBookletMaster(doc);
 
         var masterBodyFrame = findMasterFrameByLabelOnSide(
             firstPage.appliedMaster, "Booklet_Body_Story", firstPage.side

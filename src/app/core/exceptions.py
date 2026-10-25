@@ -108,6 +108,13 @@ class MissingFontError(BookletError):
     """
 
 
+class MasterNotFoundError(BookletError):
+    """Raised when a required master spread cannot be found in the InDesign document.
+
+    Replaces fragile itemByName lookup with baseName resolution.
+    """
+
+
 class RTLTableUnsupportedError(BookletError):
     """Raised when the InDesign installation does not support RTL tables.
 

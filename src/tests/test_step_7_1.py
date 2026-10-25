@@ -32,9 +32,11 @@ from app.automation.job_protocol import COMJobRequest
 from app.automation.styles_schema import TypographyStylesConfig
 from app.core.exceptions import (
     BookletError,
+    COMOperationTimeout,
     ContentExceedsEstimateError,
     InvalidBodyFrameGeometryError,
     MarginConfigError,
+    MasterNotFoundError,
     MissingFontError,
     RTLTableUnsupportedError,
     StyleConfigError,
@@ -364,6 +366,9 @@ class TestSupervisorExecutionAndErrors:
         with pytest.raises(RTLTableUnsupportedError):
             _raise_typed_error("RTLTableUnsupportedError: World-Ready build required")
 
+        with pytest.raises(MasterNotFoundError):
+            _raise_typed_error("MasterNotFoundError: master spread with baseName 'Booklet_Master' not found")
+
         with pytest.raises(BookletError):
             _raise_typed_error("SomeGenericError: something else failed")
 
@@ -459,6 +464,90 @@ class TestSupervisorExecutionAndErrors:
         assert heartbeat.value > 0.0
         assert mock_app.DoScript.called
 
+    def test_supervisor_reports_child_error_message(self, tmp_path: Path):
+        """Supervisor extracts real error message from child and raises typed BookletError, not COMOperationTimeout."""
+        from app.automation.com_supervisor import COMSupervisor
+        from app.automation.job_protocol import COMJobRequest
+
+        payload_file = tmp_path / "crash_payload.json"
+        error_file = tmp_path / "crash_payload.error.json"
+        payload_file.write_text(json.dumps({"doc_id": "crash_test"}), encoding="utf-8")
+
+        supervisor = COMSupervisor()
+
+        # Mock child process that simulates writing error file on run and exits with code 1
+        mock_process = MagicMock()
+        mock_process.is_alive.return_value = False
+        mock_process.exitcode = 1
+        mock_process.pid = 9999
+
+        def fake_start():
+            error_file.write_text(
+                json.dumps({"error": "Uncaught JavaScript exception: 'name' is a read only property."}),
+                encoding="utf-8",
+            )
+        mock_process.start.side_effect = fake_start
+
+        req = COMJobRequest(
+            job_command="generate_booklet",
+            payload_file_path=str(payload_file),
+        )
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("multiprocessing.Process", lambda *args, **kwargs: mock_process)
+            mp.setattr(supervisor, "_terminate_and_cleanup", lambda: {
+                "child_process_exited": True,
+                "owned_indesign_pid": 0,
+                "owned_indesign_confirmed_terminated": False,
+                "attached_to_pre_existing_instance": True,
+                "partial_output_path": None,
+            })
+            with pytest.raises(BookletError) as exc_info:
+                supervisor.run_job(req)
+
+            assert "read only property" in str(exc_info.value)
+            # Must NOT be a COMOperationTimeout
+            assert type(exc_info.value) is BookletError
+            assert not isinstance(exc_info.value, COMOperationTimeout)
+
+    def test_supervisor_reserves_com_timeout_for_real_heartbeat_timeout(self, tmp_path: Path):
+        """Supervisor raises COMOperationTimeout strictly on heartbeat staleness."""
+        from app.automation.com_supervisor import COMSupervisor
+        from app.automation.job_protocol import COMJobRequest
+
+        payload_file = tmp_path / "timeout_payload.json"
+        payload_file.write_text(json.dumps({"doc_id": "timeout_test"}), encoding="utf-8")
+
+        supervisor = COMSupervisor(heartbeat_timeout_seconds=5.0)
+
+        mock_process = MagicMock()
+        mock_process.is_alive.return_value = True
+        mock_process.exitcode = None
+        mock_process.pid = 9998
+
+        req = COMJobRequest(
+            job_command="generate_booklet",
+            payload_file_path=str(payload_file),
+        )
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("multiprocessing.Process", lambda *args, **kwargs: mock_process)
+            mp.setattr("time.sleep", lambda _: None)
+            times = [100.0, 100.0, 200.0]
+            mp.setattr("time.time", lambda: times.pop(0) if times else 300.0)
+            mp.setattr(supervisor, "_terminate_and_cleanup", lambda: {
+                "child_process_exited": True,
+                "owned_indesign_pid": 0,
+                "owned_indesign_confirmed_terminated": False,
+                "attached_to_pre_existing_instance": True,
+                "partial_output_path": None,
+            })
+
+            with pytest.raises(COMOperationTimeout) as exc_info:
+                supervisor.run_job(req)
+
+            assert "unresponsive" in str(exc_info.value).lower()
+
 
 # ─── 5. JSX Script Static Contract Tests ───────────────────────────────
 
@@ -519,3 +608,27 @@ class TestJSXScriptStaticContract:
 
         # 7. Result JSON writing
         assert "writeResultToFile" in content
+
+        # 8. STEP-7.1d Master Spread Contract
+        assert 'itemByName("Booklet_Master")' not in content
+        assert "doc.masterSpreads.itemByName" not in content
+        assert "getBookletMaster(doc)" in content
+
+    def test_build_master_spread_jsx_contracts(self):
+        """Verify build_master_spread.jsx implements STEP-7.1d baseName and getBookletMaster rules."""
+        ms_path = _find_jsx_script("build_master_spread.jsx")
+        assert ms_path.exists()
+        content = ms_path.read_text(encoding="utf-8")
+
+        # 1. Setup prefix and baseName instead of read-only name property
+        assert 'master.namePrefix = "B"' in content
+        assert 'master.baseName = "Booklet_Master"' in content
+        assert 'master.name = "Booklet_Master"' not in content
+
+        # 2. getBookletMaster helper
+        assert "function getBookletMaster(doc" in content
+        assert "MasterNotFoundError" in content
+
+        # 3. No itemByName for Booklet_Master anywhere
+        assert 'itemByName("Booklet_Master")' not in content
+        assert "doc.masterSpreads.itemByName" not in content

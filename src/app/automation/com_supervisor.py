@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from app.automation.job_protocol import COMJobRequest
-from app.core.exceptions import COMOperationTimeout, InDesignUnavailableError
+from app.core.exceptions import BookletError, COMOperationTimeout, InDesignUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,7 @@ class COMSupervisor:
         # instance. 0 = not recorded / attached to pre-existing instance.
         self.indesign_pid = multiprocessing.Value("i", 0)
         self.last_preflight_report = None
+        self.error_queue: Optional[multiprocessing.Queue] = None
 
     def run_job(self, job_request: COMJobRequest) -> Any:
         """Execute a COM job in an isolated child process.
@@ -68,13 +69,24 @@ class COMSupervisor:
 
         Raises:
             COMOperationTimeout: If the worker's heartbeat goes stale.
+            BookletError: If the worker process exits with a non-zero code
+                          (raising the real typed exception).
         """
         self.heartbeat.value = time.time()
         self.indesign_pid.value = 0
+        self.error_queue = multiprocessing.Queue()
+
+        if job_request.payload_file_path:
+            try:
+                stale_err = Path(job_request.payload_file_path).with_suffix(".error.json")
+                if stale_err.exists():
+                    stale_err.unlink()
+            except Exception:
+                pass
 
         self.process = multiprocessing.Process(
             target=_com_worker_entrypoint,
-            args=(self.heartbeat, self.indesign_pid, job_request),
+            args=(self.heartbeat, self.indesign_pid, job_request, self.error_queue),
             daemon=True,
         )
         self.process.start()
@@ -114,9 +126,54 @@ class COMSupervisor:
                 cleanup_state = self._terminate_and_cleanup()
                 from app.utils.auto_recovery import SupervisorRetryState
                 _state = SupervisorRetryState(**cleanup_state)
-                _exc = COMOperationTimeout(
-                    f"COM worker process exited with non-zero code: "
-                    f"{self.process.exitcode}"
+
+                err_msg: Optional[str] = None
+
+                # 1. Check error_queue
+                if self.error_queue is not None:
+                    try:
+                        err_msg = self.error_queue.get(timeout=0.2)
+                    except Exception:
+                        pass
+
+                # 2. Check small error file written next to payload
+                if not err_msg and job_request.payload_file_path:
+                    try:
+                        err_path = Path(job_request.payload_file_path).with_suffix(".error.json")
+                        if err_path.exists():
+                            with open(err_path, "r", encoding="utf-8") as ef:
+                                data = json.load(ef)
+                            err_msg = data.get("error")
+                            err_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+                # 3. Check result JSON if present
+                if not err_msg and job_request.payload_file_path:
+                    try:
+                        payload_path = Path(job_request.payload_file_path)
+                        if payload_path.exists():
+                            with open(payload_path, "r", encoding="utf-8") as pf:
+                                payload = json.load(pf)
+                            result_path = payload.get("result_file_path")
+                            if result_path and Path(result_path).exists():
+                                with open(result_path, "r", encoding="utf-8") as rf:
+                                    r_data = json.load(rf)
+                                if r_data.get("status") == "error" or "error" in r_data:
+                                    err_msg = r_data.get("error")
+                    except Exception:
+                        pass
+
+                if err_msg:
+                    logger.error("COM worker reported failure: %s", err_msg)
+                    try:
+                        _raise_typed_error(err_msg)
+                    except BookletError as typed_exc:
+                        typed_exc.supervisor_state = _state  # type: ignore[attr-defined]
+                        raise typed_exc
+
+                _exc = BookletError(
+                    f"COM worker process exited with non-zero code: {self.process.exitcode}"
                 )
                 _exc.supervisor_state = _state  # type: ignore[attr-defined]
                 raise _exc
@@ -268,6 +325,7 @@ def _com_worker_entrypoint(
     heartbeat: multiprocessing.Value,
     indesign_pid: multiprocessing.Value,
     job_request: COMJobRequest,
+    error_queue: Optional[multiprocessing.Queue] = None,
 ) -> None:
     """Runs entirely inside the child process.
 
@@ -279,6 +337,7 @@ def _com_worker_entrypoint(
     already running (pre-existing, not owned by us) versus needing
     to be launched (owned by this job, PID recorded for cleanup).
     """
+    import sys
     import pythoncom
     import psutil
     import win32com.client
@@ -336,6 +395,22 @@ def _com_worker_entrypoint(
                 preflight_output_path=job_request.preflight_output_path,
             )
 
+    except Exception as exc:
+        err_msg = str(exc)
+        logger.error("COM worker exception during %s: %s", job_request.job_command, err_msg)
+        if error_queue is not None:
+            try:
+                error_queue.put(err_msg)
+            except Exception as eq_err:
+                logger.debug("Failed putting error to error_queue: %s", eq_err)
+        if job_request.payload_file_path:
+            try:
+                err_path = Path(job_request.payload_file_path).with_suffix(".error.json")
+                with open(err_path, "w", encoding="utf-8") as ef:
+                    json.dump({"error": err_msg, "type": type(exc).__name__}, ef)
+            except Exception as ef_err:
+                logger.debug("Failed writing error file: %s", ef_err)
+        sys.exit(1)
     finally:
         pythoncom.CoUninitialize()
 
@@ -382,6 +457,7 @@ def _raise_typed_error(error_msg: str, original_exc: Optional[Exception] = None)
         ContentExceedsEstimateError,
         InvalidBodyFrameGeometryError,
         MarginConfigError,
+        MasterNotFoundError,
         MissingFontError,
         RTLTableUnsupportedError,
         StyleConfigError,
@@ -406,6 +482,8 @@ def _raise_typed_error(error_msg: str, original_exc: Optional[Exception] = None)
         raise MarginConfigError(error_msg) from original_exc
     elif "rtltableunsupportederror" in msg_lower:
         raise RTLTableUnsupportedError(error_msg) from original_exc
+    elif "masternotfounderror" in msg_lower:
+        raise MasterNotFoundError(error_msg) from original_exc
     else:
         raise BookletError(error_msg) from original_exc
 

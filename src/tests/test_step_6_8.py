@@ -197,11 +197,23 @@ class MockMasterPage:
 
 class MockMasterSpread:
     def __init__(self, name: str = "A-Master") -> None:
-        self.name = name
+        self.namePrefix = "A"
+        self.baseName = "Master"
+        self._name = name
         self.pages_list = [
             MockMasterPage(side=MockPageSideOptions.LEFT_HAND),
             MockMasterPage(side=MockPageSideOptions.RIGHT_HAND),
         ]
+
+    @property
+    def name(self) -> str:
+        if hasattr(self, "namePrefix") and hasattr(self, "baseName"):
+            return f"{self.namePrefix}-{self.baseName}"
+        return getattr(self, "_name", "A-Master")
+
+    @name.setter
+    def name(self, val: str) -> None:
+        self._name = val
 
     @property
     def pages(self) -> Any:
@@ -232,10 +244,19 @@ class MockDocument:
             def __init__(self, doc: MockDocument) -> None:
                 self.doc = doc
 
+            def count(self) -> int:
+                return len(self.doc.masterSpreads_list)
+
+            def __len__(self) -> int:
+                return len(self.doc.masterSpreads_list)
+
             def item(self, idx: int) -> MockMasterSpread:
                 return self.doc.masterSpreads_list[idx]
 
             def itemByName(self, name: str) -> MockMasterSpread:
+                for ms in self.doc.masterSpreads_list:
+                    if getattr(ms, "baseName", "") == name or getattr(ms, "name", "") == name:
+                        return ms
                 return self.doc.masterSpreads_list[0]
 
         return _Spreads(self)
@@ -276,7 +297,8 @@ def simulate_setup_master_spread(
     - Leaves document.textPreferences untouched (Zero-Mutation / AC-6.8.4)
     """
     master = doc.masterSpreads.item(0)
-    master.name = "Booklet_Master"
+    master.namePrefix = "B"
+    master.baseName = "Booklet_Master"
 
     page_count = master.pages.count()
     for i in range(page_count):
@@ -520,7 +542,7 @@ class TestAcceptanceCriteria682:
         while current_count < target_count:
             last_page = doc.pages.item(-1)
             new_p = doc.pages.add(location=None, reference=last_page)
-            new_p.appliedMaster = doc.masterSpreads.itemByName("Booklet_Master")
+            new_p.appliedMaster = next((m for m in doc.masterSpreads_list if getattr(m, "baseName", "") == "Booklet_Master"), doc.masterSpreads.item(0))
             current_count += 1
 
         assert doc.pages.count() == 8
