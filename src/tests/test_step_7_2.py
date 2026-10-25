@@ -72,6 +72,74 @@ def sample_docx_fixture(tmp_path: Path) -> Path:
     return doc_path
 
 
+@pytest.fixture
+def equivalent_test1_docx_fixture(tmp_path: Path) -> Path:
+    """Generate an equivalent DOCX fixture replacing private samples/test1.docx.
+
+    Contains:
+    0. w:p with 7 Arabic lines separated by <w:br/>
+    1. w:tbl (5x4 LTR table without bidiVisual, Arabic columns)
+    2. w:p empty with a <w:br/>
+    3. w:p empty
+    4. w:p with an inline m:oMath equation
+    """
+    from docx.oxml import parse_xml
+
+    doc_path = tmp_path / "equivalent_test1.docx"
+    doc = DocxDocument()
+
+    # 0. Arabic text with 7 line breaks
+    p0 = doc.add_paragraph()
+    p0.add_run("السلام عليكم هذه هي مادة الرياضيات ")
+    p0.add_run().add_break()
+    p0.add_run("ان مادة الرياضيات هي مادة زنجية حافوزلقية ")
+    p0.add_run().add_break()
+    p0.add_run("س وزاري : ما هي مادة الرياضيات  بالنسبة لك ؟ ")
+    p0.add_run().add_break()
+    p0.add_run("ج : هي مادة زنجية ")
+    p0.add_run().add_break()
+    p0.add_run("س : من اوا سيد حمبولة ام سيد حنوش ؟ ")
+    p0.add_run().add_break()
+    p0.add_run(
+        "ج  : في المعركة التي حدثت ساعه 12:00 ليلا قام السيد حنوش بتوجيه شربة قوية "
+        "الى سيد حمبولة ومن بعدها صدها سيد حمبولة ليقوم بعدها عباس دي واترسون "
+        "بالهجوم عليهما وطرحهما ارضا هما الاثنين "
+    )
+    p0.add_run().add_break()
+    p0.add_run("س : عدد شخصيات قوية وشخصيات متوسطة وشخصيات ضعيفة في الرياضيات ")
+    p0.add_run().add_break()
+
+    # 1. Table 5x4 LTR without bidiVisual
+    tbl = doc.add_table(rows=5, cols=4)
+    table_data = [
+        ["متوسط متوسط متوسط", "قوي قوي قوي", "ضعيف ضعيف ضعيف", "الشخصية الشخصية الشخصية"],
+        ["", "نعم نعم نعم", "", "عباس دي واترسون عباس دي واترسون عباس دي واترسون"],
+        ["نعم نعم نعم", "", "", "سيد حنوش سيد حنوش سيد حنوش"],
+        ["نعم نعم نعم", "", "", "سيد حمبولة سيد حمبولة سيد حمبولة"],
+        ["", "", "نعم نعم نعم", "السركتح السركتح السركتح"],
+    ]
+    for r_idx, row in enumerate(table_data):
+        for c_idx, val in enumerate(row):
+            tbl.cell(r_idx, c_idx).text = val
+
+    # 2. Empty w:p with break
+    p2 = doc.add_paragraph()
+    p2.add_run().add_break()
+
+    # 3. Empty w:p
+    doc.add_paragraph()
+
+    # 4. w:p with inline m:oMath equation
+    p4 = doc.add_paragraph()
+    omml = parse_xml(
+        r'''<m:oMath xmlns:m='http://schemas.openxmlformats.org/officeDocument/2006/math'><m:r><m:t>1+x^n=1+nx</m:t></m:r></m:oMath>'''
+    )
+    p4._p.append(omml)
+
+    doc.save(str(doc_path))
+    return doc_path
+
+
 class TestDocxPipelineExtractionAndClassification:
     def test_extract_document_fixture(self, sample_docx_fixture: Path):
         """Extract content from real DOCX fixture and verify source counts and integrity."""
@@ -478,12 +546,11 @@ class TestLineBreaks:
 
 
 class TestMathMLWarning:
-    def test_mathml_not_renderable_warning_emitted(self, tmp_path: Path):
+    def test_mathml_not_renderable_warning_emitted(self, equivalent_test1_docx_fixture: Path):
         """MathML equations emit MATHML_NOT_RENDERABLE warning."""
-        doc = DocxDocument("samples/test1.docx")
         from app.core.docx_extractor import DocxContentExtractor
         ext = DocxContentExtractor()
-        doc_model = ext.extract("samples/test1.docx")
+        doc_model = ext.extract(str(equivalent_test1_docx_fixture))
 
         math_blocks = [b for b in doc_model.pages[0].content_blocks if b.block_type == "math_formula"]
         assert len(math_blocks) >= 1
@@ -492,11 +559,11 @@ class TestMathMLWarning:
 
 
 class TestCoverageAudit:
-    def test_coverage_audit_rows_structure(self):
+    def test_coverage_audit_rows_structure(self, equivalent_test1_docx_fixture: Path):
         """Verify coverage audit generates required structure for paragraphs and tables."""
         from app.core.docx_extractor import DocxContentExtractor
         ext = DocxContentExtractor()
-        doc_model = ext.extract("samples/test1.docx")
+        doc_model = ext.extract(str(equivalent_test1_docx_fixture))
 
         audit_rows = doc_model.audit_rows
         assert len(audit_rows) == 5
@@ -523,15 +590,15 @@ class TestCoverageAudit:
         assert p2_audit["is_empty"] is True
         assert p2_audit["blocks"] == []
 
-    def test_text_coverage_check_on_test1(self):
-        """Verify text-coverage check passes with zero loss on samples/test1.docx."""
+    def test_text_coverage_check_on_test1(self, equivalent_test1_docx_fixture: Path):
+        """Verify text-coverage check passes with zero loss on equivalent fixture."""
         from app.core.docx_extractor import DocxContentExtractor
         from tools.generate_from_docx import run_coverage_audit
 
         ext = DocxContentExtractor()
-        doc_model = ext.extract("samples/test1.docx")
+        doc_model = ext.extract(str(equivalent_test1_docx_fixture))
         audit_rows, audit_warnings, text_loss = run_coverage_audit(
-            "samples/test1.docx", doc_model, allow_loss=False
+            str(equivalent_test1_docx_fixture), doc_model, allow_loss=False
         )
 
         assert text_loss is False
