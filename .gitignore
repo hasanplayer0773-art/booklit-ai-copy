@@ -7,4 +7,3 @@ venv/
 *.log
 src/assets/gtk_runtime/
 .pytest_cache/
-booklit ai copy/

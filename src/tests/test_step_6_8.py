@@ -485,23 +485,19 @@ class TestAcceptanceCriteria681:
         assert "1" not in f_frame.contents_stream
 
     def test_jsx_code_contracts_in_script_files(self) -> None:
-        """Verify the actual build_master_spread.jsx files contain the exact digit-shaping implementation."""
+        """Verify the actual build_master_spread.jsx file contains the exact digit-shaping implementation."""
         from pathlib import Path
 
-        jsx_paths = [
-            Path("src/assets/scripts/build_master_spread.jsx"),
-            Path("dist/Booklet_AI/_internal/assets/scripts/build_master_spread.jsx"),
-        ]
-        for p in jsx_paths:
-            assert p.exists(), f"JSX script missing: {p}"
-            code = p.read_text(encoding="utf-8")
-            # Verify native digit-shaping usage
-            assert "DigitsTypeOptions.HINDI_DIGITS" in code
-            assert "DigitsTypeOptions.ARABIC_DIGITS" in code
-            assert "digitsType" in code
-            assert "SpecialCharacters.AUTO_PAGE_NUMBER" in code
-            # Verify it does NOT mistakenly set section numbering style
-            assert "pageNumberStyle" not in code
+        jsx_path = Path(__file__).resolve().parent.parent / "assets" / "scripts" / "build_master_spread.jsx"
+        assert jsx_path.exists(), f"JSX script missing: {jsx_path}"
+        code = jsx_path.read_text(encoding="utf-8")
+        # Verify native digit-shaping usage
+        assert "DigitsTypeOptions.HINDI_DIGITS" in code
+        assert "DigitsTypeOptions.ARABIC_DIGITS" in code
+        assert "digitsType" in code
+        assert "SpecialCharacters.AUTO_PAGE_NUMBER" in code
+        # Verify it does NOT mistakenly set section numbering style
+        assert "pageNumberStyle" not in code
 
 
 # ═══════════════════════════════════════════════════════════════════════
