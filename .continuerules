@@ -1,0 +1,52 @@
+Booklet_AI Desktop — Persistent Rules (Auto-injected into every conversation)
+Tech Stack (Do not change it or suggest alternatives)
+Python 3.11
+
+PySide6 (Qt6) — Desktop UI, via QThread for heavy tasks
+
+Pydantic v2 with frozen=True — For all data models
+
+pywin32 (COM) — For Adobe InDesign control
+
+PyMuPDF — For PDF extraction
+
+python-docx — For Word extraction
+
+lxml
+
+keyring — For API keys storage (never plaintext)
+
+SQLite — For storing job_history and others
+
+Critical Rules — Must not be broken in any STEP
+Zero-Mutation: The original text extracted from the source (Word/PDF) must not be altered at all during processing. Any transformation must be verified via a SHA-256 hash (canonical NFC-normalized) before and after.
+
+COM Threading: All interactions with InDesign COM must occur exclusively inside a single worker thread named COMWorker(QThread). Never on the UI thread. Never pass live COM objects (Document, Page, TextFrame, etc.) between threads — only file paths, primitives, and Qt Signals.
+
+STA Lifecycle: pythoncom.CoInitialize() at the beginning of run(), and pythoncom.CoUninitialize() inside a finally block is mandatory.
+
+Smart Text Reflow stays enabled (not disabled) — The correct solution for the overflow issue is manual story threading via a label on the body frame + .override(), not disabling reflow.
+
+Fail-Fast: Upon any breach of text integrity, halt and display an error — do not proceed silently (no silent fallback).
+
+Required Coding Style
+Strictly follow the function signatures and names mentioned in the attached STEP file. Do not invent unmentioned parameters or additional files.
+
+Any code embedded in the plan is a "protocol/contract" and not a final, ready-to-run version — implement it with 100% working Python/JS code, do not just copy it literally if it is incomplete.
+
+Do not implement anything outside the scope of the requested STEP in the current message.
+
+After finishing the code, list the Acceptance Criteria (AC) mentioned in the same STEP file, and confirm one by one whether the code achieves them or not — explicitly stating any missing points.
+
+Explicit Scope Boundary — Do not add to any STEP
+OCR / Scanned PDF support
+
+English classification rules for RuleBasedClassifier
+
+"style/font profile" system
+
+Portable-mode packaging
+
+Static headers for the teacher's name/specialty on every page
+
+Any remote-access or remote-support capabilit

@@ -1,0 +1,129 @@
+"""
+Booklet_AI Desktop — Custom Exception Hierarchy
+
+All application-specific exceptions derive from BookletError.
+This module is the single source of truth for exception types
+referenced across extraction, classification, and automation layers.
+"""
+
+
+class BookletError(Exception):
+    """Base exception for Booklet_AI core.
+
+    All domain-specific exceptions must inherit from this class
+    to enable centralized error handling and translation (STEP-6.2).
+    """
+
+
+class TextIntegrityError(BookletError):
+    """Raised when canonical text hash verification fails.
+
+    Indicates an unauthorized mutation of source text content —
+    the SHA-256 hash of the canonicalized text does not match
+    the expected value. This triggers an immediate halt of the
+    generation cycle (Fail-Fast policy).
+    """
+
+
+class MathExtractionError(BookletError):
+    """Raised when OMML/MathML/LaTeX conversion or XSLT transformation fails.
+
+    Covers failures in:
+    - OMML → MathML conversion via XSLT (STEP-1.2)
+    - MathType/OLE equation detection
+    - Chemistry formula extraction
+    """
+
+
+class COMOperationTimeout(BookletError):
+    """Raised when the COM worker process's heartbeat goes stale.
+
+    Indicates the InDesign automation process has become unresponsive,
+    likely due to a blocked modal dialog or hung InDesign instance.
+    The supervisor will terminate the worker and owned InDesign process.
+    """
+
+
+class InDesignUnavailableError(BookletError):
+    """Raised when InDesign is not available via COM.
+
+    Checked at application startup (STEP-4.1) — if InDesign is not
+    installed, not licensed, or not responding to COM activation,
+    the application cannot perform its primary function.
+    """
+
+
+class InvalidBodyFrameGeometryError(BookletError):
+    """Raised when computed body frame dimensions are invalid.
+
+    Occurs when margin values overlap or produce a zero/negative
+    text area — prevents passing impossible geometry to InDesign.
+    """
+
+
+class ContentExceedsEstimateError(BookletError):
+    """Raised when actual generated content exceeds the pre-layout page-count estimate.
+
+    This is a pricing/estimation staleness issue, NOT a filler-page
+    insertion failure. The correct response is to recalculate the
+    price quote against the actual page count via
+    pricing_engine.imposed_page_count(actual_count, binding),
+    not to silently truncate real content pages.
+
+    Mirrored from the JSX side (addBlankFillerPages) — the Python
+    pagination_sync module catches the JSX error and raises this
+    Python exception with the same semantics.
+    """
+
+
+class MarginConfigError(BookletError):
+    """Raised when a required margin field is missing or invalid in the JSX payload.
+
+    Mirrors the JSX-side requireMarginField() validation — indicates
+    a Python↔JSX serialization mismatch or an incomplete payload.
+    The fix is to correct the mismatch, never to add a fallback default.
+    """
+
+
+class StyleMappingError(BookletError):
+    """Raised when a BlockType has no mapped paragraph style.
+
+    Every block type must have an explicit entry in the style map;
+    silent fallback to a default style is not permitted (STEP-2.3).
+    """
+
+
+class RTLTableUnsupportedError(BookletError):
+    """Raised when the InDesign installation does not support RTL tables.
+
+    The InDesign build must support
+    TableDirectionOptions.RIGHT_TO_LEFT_DIRECTION (Middle-East /
+    World-Ready composer build) for Arabic booklet table injection.
+
+    An Arabic table rendered left-to-right (Column 0 on the left margin)
+    is a critical layout defect — exactly the class of error this
+    project's Fail-Fast policy exists to prevent. This exception is
+    raised immediately at table injection time rather than allowing
+    silent LTR degradation.
+
+    Should ideally be detected once at application startup (STEP-4.1)
+    and surfaced to the user clearly, rather than discovered per-table
+    mid-generation.
+    """
+
+
+class QuestionIndexError(BookletError):
+    """Raised on unrecoverable database write failure for the question bank."""
+
+
+class PreflightBlockerError(BookletError):
+    """Raised when export is attempted while preflight blockers exist without override (STEP-6.4)."""
+
+    def __init__(self, blockers: list = None):
+        self.blockers = blockers or []
+        codes = [getattr(b, "code", str(b)) for b in self.blockers]
+        super().__init__(
+            f"Cannot proceed to export: {len(self.blockers)} unresolved "
+            f"preflight blocker(s): {codes}"
+        )
+
