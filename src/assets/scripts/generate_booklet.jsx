@@ -621,8 +621,8 @@ function generateBookletMain() {
                 var currentTableWidth = getFrameUsableWidth(currentFrame);
                 injectRTLTable(story, item, currentTableWidth, colors, styles);
             } else if (item.block_type === "math_formula") {
-                // Math Formula Injection (strict LTR)
-                injectMathFormulaBlock(story, item.raw_content || "", styles);
+                // Math Formula Injection (strict LTR - SVG image or placeholder)
+                injectMathFormulaBlock(story, item, styles);
             } else {
                 // Atomic insert-style-release for standard blocks
                 var blockText = item.raw_content || "";
@@ -662,7 +662,7 @@ function generateBookletMain() {
         var greekCharsExpected = 0;
         for (var itIdx = 0; itIdx < items.length; itIdx++) {
             var it = items[itIdx];
-            if (it.raw_content && typeof it.raw_content === "string") {
+            if (it.raw_content && typeof it.raw_content === "string" && it.render_mode !== "image") {
                 var m = it.raw_content.match(GREEK_MATH_JS_REGEX);
                 if (m) greekCharsExpected += m.length;
             }

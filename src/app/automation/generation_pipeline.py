@@ -27,6 +27,7 @@ from app.automation.job_protocol import COMJobRequest
 from app.automation.pagination_sync import BindingMethod, imposed_page_count
 from app.automation.styles_schema import TypographyStylesConfig
 from app.core.exceptions import TextIntegrityError
+from app.core.math_renderer import extract_alt_text, render_mathml_to_svg
 from app.core.models import BookletDocument, ContentBlock
 from app.core.text_integrity import verify_text_integrity
 
@@ -93,6 +94,11 @@ def build_payload(
     pages_list: List[Dict[str, Any]] = []
     tables_list: List[Dict[str, Any]] = []
 
+    math_dir = out_path / "math"
+    math_size = getattr(styles_cfg, "math_size_pt", 12.0)
+    math_rendered_count = 0
+    math_failed_count = 0
+
     for page in document.pages:
         p_blocks: List[Dict[str, Any]] = []
         for b in page.content_blocks:
@@ -104,6 +110,29 @@ def build_payload(
                 "user_edited": b.user_edited,
                 "source_position": b.source_position,
             }
+
+            if b.block_type == "math_formula":
+                svg_file = math_dir / f"{b.block_id}.svg"
+                try:
+                    rendered_svg = render_mathml_to_svg(
+                        mathml=b.raw_content,
+                        out_path=svg_file,
+                        size_pt=math_size,
+                    )
+                    b_dict["render_mode"] = "image"
+                    b_dict["svg_path"] = str(rendered_svg.resolve())
+                    b_dict["alt_text"] = extract_alt_text(b.raw_content)
+                    math_rendered_count += 1
+                except Exception as exc:
+                    logger.warning("Math rendering failed for %s: %s", b.block_id, exc)
+                    b_dict["render_mode"] = "placeholder"
+                    b_dict["placeholder_text"] = "[معادلة تحتاج مراجعة]"
+                    b_dict["alt_text"] = "equation"
+                    fail_warning = f"MATH_RENDER_FAILED:{b.block_id}"
+                    if fail_warning not in document.warnings:
+                        document.warnings.append(fail_warning)
+                    math_failed_count += 1
+
             blocks_list.append(b_dict)
             p_blocks.append(b_dict)
 
@@ -205,6 +234,15 @@ def build_payload(
             "tables": p_tables,
         })
 
+    # MathML Warning reconciliation (STEP-7.4 Requirement 5):
+    # Remove MATHML_NOT_RENDERABLE when render succeeds; keep it only for placeholders.
+    if math_rendered_count > 0 and math_failed_count == 0:
+        while "MATHML_NOT_RENDERABLE" in document.warnings:
+            document.warnings.remove("MATHML_NOT_RENDERABLE")
+    elif math_failed_count > 0:
+        if "MATHML_NOT_RENDERABLE" not in document.warnings:
+            document.warnings.append("MATHML_NOT_RENDERABLE")
+
     first_page_footer = (
         pages_list[0]["footer_text"]
         if pages_list and pages_list[0].get("footer_text")
@@ -227,6 +265,12 @@ def build_payload(
         "binding": binding_str,
         "geometry": payload_geometry,
         "styles": styles_cfg.model_dump(),
+        "math_stats": {
+            "rendered": math_rendered_count,
+            "failed": math_failed_count,
+            "total": math_rendered_count + math_failed_count,
+        },
+        "warnings": list(document.warnings),
         "blocks": blocks_list,
         "tables": tables_list,
         "items": items_list,

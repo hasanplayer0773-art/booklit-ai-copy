@@ -153,3 +153,12 @@ class PreflightBlockerError(BookletError):
             f"preflight blocker(s): {codes}"
         )
 
+
+class MathRenderError(BookletError):
+    """Raised when MathML rendering to SVG vector image fails (STEP-7.4)."""
+
+
+class MathPlaceError(BookletError):
+    """Raised when placing an SVG math formula image into InDesign fails (STEP-7.4)."""
+
+

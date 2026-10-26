@@ -39,50 +39,141 @@
 // ─── Math Formula Injection ───────────────────────────────────────────
 
 /**
- * Inject a math/formula text block into the story with strict LTR direction.
+ * Inject a math/formula block into the story with strict LTR direction.
  *
- * Appends the math text at the current end of the story, applies the
- * mathFormulaStyle paragraph style, then EXPLICITLY sets paragraph
- * direction to LTR as a secondary safeguard (Defense in Depth).
+ * STEP-7.4:
+ * When render_mode is "image":
+ * 1. Inserts an inline anchored rectangle at story.insertionPoints[-1].
+ * 2. Sets inline anchoring on rect.anchoredObjectSettings.
+ * 3. Places the SVG with rect.place(File(svg_path)).
+ *    If place() fails, throws MathPlaceError with the block_id.
+ * 4. Fits the frame to content: rect.fit(FitOptions.FRAME_TO_CONTENT).
+ * 5. Sets object alt text (label and customAltText).
+ * 6. Adds paragraph break (\r).
+ * 7. Applies MathFormulaStyle with centered alignment and explicit LTR direction
+ *    via atomic insert-style-release.
  *
- * The template-level mathFormulaStyle MUST already have its paragraph
- * direction set to LTR as the primary defense mechanism. This code-level
- * assignment is an independent safeguard against template edits that
- * might remove the direction setting — without this, silent BiDi
- * corruption would go undetected until print.
+ * When render_mode is "placeholder":
+ * Shows visible placeholder text "[معادلة تحتاج مراجعة]" with MathFormulaStyle (LTR, centered)
+ * — NEVER raw XML markup.
+ *
+ * Defense in Depth: Explicit LTR enforcement at the code level.
+ * Do NOT rely solely on mathFormulaStyle's template definition —
+ * the template setting is a mandatory precondition on assets/*.idml,
+ * this is the code-level safeguard against template drift.
  *
  * @param {Story} story - The InDesign story object to inject into.
- * @param {string} mathText - The math/formula text content to inject.
- *     Examples: "(1 + x)^n = 1 + nx + ...", "2!", "x^2 + y^2 = r^2"
- * @param {Object} styles - Style references object. Must contain:
- *     mathFormulaStyle: ParagraphStyle — the LTR math paragraph style
- *         from the template (mandatory precondition: its paragraph
- *         direction must be LTR at the template level).
+ * @param {Object|string} mathItemOrText - The math payload item or formula text.
+ * @param {Object} styles - Style references object containing mathFormulaStyle.
  */
-function injectMathFormulaBlock(story, mathText, styles) {
-    // Record the insertion point index BEFORE inserting content
-    var start = story.insertionPoints[-1].index;
+function injectMathFormulaBlock(story, mathItemOrText, styles) {
+    var isItemObject = (typeof mathItemOrText === "object" && mathItemOrText !== null);
+    var renderMode = isItemObject ? (mathItemOrText.render_mode || "image") : "text";
 
-    // Insert math text followed by a paragraph break
-    story.insertionPoints[-1].contents = mathText + "\r";
+    if (renderMode === "image" && isItemObject && mathItemOrText.svg_path) {
+        var svgPath = mathItemOrText.svg_path;
+        var blockId = mathItemOrText.block_id || "unknown";
+        var altText = mathItemOrText.alt_text || "equation";
 
-    // Record the insertion point index AFTER inserting content
-    var end = story.insertionPoints[-1].index;
+        var start = story.insertionPoints[-1].index;
 
-    // Apply mathFormulaStyle to the inserted text range.
-    // Math.max guards against zero-length edge case (empty mathText
-    // with only the \r — still needs styling for consistency).
-    var targetRange = story.characters.itemByRange(
-        start, Math.max(start, end - 1)
-    );
-    targetRange.applyParagraphStyle(styles.mathFormulaStyle, false);
+        // 1. Insert inline anchored rectangle at current insertion point
+        var rect = story.insertionPoints[-1].rectangles.add();
 
-    // Defense in Depth: Explicit LTR enforcement at the code level.
-    // Do NOT rely solely on mathFormulaStyle's template definition —
-    // the template setting is a mandatory precondition on assets/*.idml,
-    // this is the code-level safeguard against template drift.
-    targetRange.paragraphs.everyItem().paragraphDirection =
-        ParagraphDirectionOptions.LEFT_TO_RIGHT_DIRECTION;
+        // 2. Configure inline anchoring
+        if (rect.anchoredObjectSettings) {
+            if (typeof AnchorPosition !== "undefined" && AnchorPosition.INLINE_POSITION) {
+                rect.anchoredObjectSettings.anchoredPosition = AnchorPosition.INLINE_POSITION;
+            }
+        }
+
+        // 3. Place SVG file into the rectangle
+        var svgFile = File(svgPath);
+        if (!svgFile.exists) {
+            throw new Error("MathPlaceError: SVG file does not exist at '" + svgPath + "' for block " + blockId);
+        }
+        try {
+            rect.place(svgFile);
+        } catch (placeErr) {
+            throw new Error("MathPlaceError: failed to place SVG for block " + blockId + " ('" + svgPath + "'): " + placeErr.message);
+        }
+
+        // 4. Fit frame to content
+        rect.fit(FitOptions.FRAME_TO_CONTENT);
+
+        // 5. Add object alt text
+        if (altText) {
+            rect.label = altText;
+            if (rect.objectExportOptions) {
+                try {
+                    if (typeof SourceType !== "undefined" && SourceType.SOURCE_CUSTOM) {
+                        rect.objectExportOptions.altTextSourceType = SourceType.SOURCE_CUSTOM;
+                    }
+                    rect.objectExportOptions.customAltText = altText;
+                } catch (eAlt) {
+                    $.writeln("Math warning: could not set customAltText for " + blockId + ": " + eAlt.message);
+                }
+            }
+        }
+
+        // 6. Paragraph break
+        story.insertionPoints[-1].contents = "\r";
+        var end = story.insertionPoints[-1].index;
+
+        // 7. Atomic insert-style-release: centered paragraph with MathFormulaStyle (LTR)
+        var targetRange = story.characters.itemByRange(
+            start, Math.max(start, end - 1)
+        );
+        if (styles && styles.mathFormulaStyle) {
+            targetRange.applyParagraphStyle(styles.mathFormulaStyle, false);
+        }
+
+        // Defense in Depth: Explicit LTR enforcement and centering
+        targetRange.paragraphs.everyItem().paragraphDirection =
+            ParagraphDirectionOptions.LEFT_TO_RIGHT_DIRECTION;
+        if (typeof Justification !== "undefined" && Justification.CENTER_ALIGN) {
+            targetRange.paragraphs.everyItem().justification =
+                Justification.CENTER_ALIGN;
+        }
+
+    } else {
+        // Placeholder or legacy text mode — NEVER raw XML
+        var contentToInsert = "";
+        if (isItemObject) {
+            if (mathItemOrText.render_mode === "placeholder" || !mathItemOrText.svg_path) {
+                contentToInsert = mathItemOrText.placeholder_text || "[معادلة تحتاج مراجعة]";
+            } else {
+                contentToInsert = mathItemOrText.raw_content || "[معادلة تحتاج مراجعة]";
+            }
+        } else {
+            contentToInsert = String(mathItemOrText || "");
+        }
+
+        // Guard: NEVER inject raw MathML XML markup into InDesign output
+        if (contentToInsert.indexOf("<math") !== -1 || contentToInsert.indexOf("<mml:math") !== -1) {
+            contentToInsert = "[معادلة تحتاج مراجعة]";
+        }
+
+        var mathText = contentToInsert;
+        var start = story.insertionPoints[-1].index;
+        story.insertionPoints[-1].contents = mathText + "\r";
+        var end = story.insertionPoints[-1].index;
+
+        var targetRange = story.characters.itemByRange(
+            start, Math.max(start, end - 1)
+        );
+        if (styles && styles.mathFormulaStyle) {
+            targetRange.applyParagraphStyle(styles.mathFormulaStyle, false);
+        }
+
+        // Defense in Depth: Explicit LTR enforcement and centering
+        targetRange.paragraphs.everyItem().paragraphDirection =
+            ParagraphDirectionOptions.LEFT_TO_RIGHT_DIRECTION;
+        if (typeof Justification !== "undefined" && Justification.CENTER_ALIGN) {
+            targetRange.paragraphs.everyItem().justification =
+                Justification.CENTER_ALIGN;
+        }
+    }
 }
 
 

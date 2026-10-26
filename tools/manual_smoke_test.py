@@ -119,14 +119,77 @@ def create_sample_3page_document() -> BookletDocument:
         tables=[table1],
     )
 
-    # ── Page 3: Math Formula ───────────────────────────────────────────
-    m_text = "(cos θ + i sin θ)^n = cos(nθ) + i sin(nθ)"
-    m_block = ContentBlock(
+    # ── Page 3: Math Formulas (Real MathML - STEP-7.4) ─────────────────
+    m_mathml_1 = """<math xmlns="http://www.w3.org/1998/Math/MathML">
+  <msup>
+    <mrow>
+      <mo>(</mo>
+      <mn>1</mn>
+      <mo>+</mo>
+      <mi>x</mi>
+      <mo>)</mo>
+    </mrow>
+    <mi>n</mi>
+  </msup>
+  <mo>=</mo>
+  <mn>1</mn>
+  <mo>+</mo>
+  <mfrac>
+    <mrow>
+      <mi>n</mi>
+      <mi>x</mi>
+    </mrow>
+    <mrow>
+      <mn>1</mn>
+      <mo>!</mo>
+    </mrow>
+  </mfrac>
+  <mo>+</mo>
+  <mfrac>
+    <mrow>
+      <mi>n</mi>
+      <mo>(</mo>
+      <mi>n</mi>
+      <mo>−</mo>
+      <mn>1</mn>
+      <mo>)</mo>
+      <msup>
+        <mi>x</mi>
+        <mn>2</mn>
+      </msup>
+    </mrow>
+    <mrow>
+      <mn>2</mn>
+      <mo>!</mo>
+    </mrow>
+  </mfrac>
+  <mo>+</mo>
+  <mo>…</mo>
+</math>"""
+    m_block1 = ContentBlock(
         block_id="block-m1",
         block_type="math_formula",
-        raw_content=m_text,
-        content_hash=compute_canonical_hash(m_text),
+        raw_content=m_mathml_1,
+        content_hash=compute_canonical_hash(m_mathml_1),
         source_position={"page": 3, "paragraph_index": 0},
+    )
+
+    m_mathml_2 = """<math xmlns="http://www.w3.org/1998/Math/MathML">
+  <mrow>
+    <mi>cos</mi>
+    <mi>θ</mi>
+    <mo>+</mo>
+    <mi>i</mi>
+    <mi>sin</mi>
+    <mi>θ</mi>
+  </mrow>
+</math>"""
+    m_block2 = ContentBlock(
+        block_id="block-m2",
+        block_type="math_formula",
+        raw_content=m_mathml_2,
+        content_hash=compute_canonical_hash(m_mathml_2),
+        source_position={"page": 3, "paragraph_index": 1},
     )
 
     page3 = PageData(
@@ -135,7 +198,7 @@ def create_sample_3page_document() -> BookletDocument:
         height=841.89,
         header_text="الرياضيات — السادس العلمي",
         footer_text="الفصل الأول",
-        content_blocks=[m_block],
+        content_blocks=[m_block1, m_block2],
         tables=[],
     )
 

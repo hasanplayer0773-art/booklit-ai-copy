@@ -412,6 +412,7 @@ def build_report(
     indesign_result: Optional[Dict[str, Any]] = None,
     pipeline_warnings: Optional[List[str]] = None,
     output_files: Optional[Dict[str, str]] = None,
+    math_stats: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """Construct structured report dictionary adhering to STEP-7.2 specification.
 
@@ -467,6 +468,8 @@ def build_report(
         "total_blocks": len(all_blocks),
         "legacy_equation_count": legacy_equation_count,
         "math_formula_count": len(math_blocks),
+        "math_rendered_count": (math_stats or {}).get("rendered", 0),
+        "math_failed_count": (math_stats or {}).get("failed", 0),
         "first_3_math_formulas": first_3_math,
         "actual_page_count": actual_page_count,
         "imposed_page_count": imposed_page_count,
@@ -513,6 +516,8 @@ def format_report_text(report: Dict[str, Any]) -> str:
         "── 3. Math & Equation Diagnostics ────────────────────────────────────",
         f"  * Legacy Equation Placeholders: {report.get('legacy_equation_count', 0)}",
         f"  * Math Formula Blocks:          {report.get('math_formula_count', 0)}",
+        f"  * Math Equations Rendered:      {report.get('math_rendered_count', 0)}",
+        f"  * Math Equations Failed:        {report.get('math_failed_count', 0)}",
     ])
     first_3 = report.get("first_3_math_formulas", [])
     if first_3:
@@ -663,6 +668,13 @@ def run_pipeline(
         # ── Stage 3b: ORDER_CHECK Verification ──────────────────────────
         with open(payload_path, "r", encoding="utf-8") as f:
             payload_json = json.load(f)
+        math_stats = payload_json.get("math_stats", {})
+        if math_stats.get("rendered", 0) > 0 and math_stats.get("failed", 0) == 0:
+            pipeline_warnings = [w for w in pipeline_warnings if w != "MATHML_NOT_RENDERABLE"]
+        for w in booklet_doc.warnings:
+            if w not in pipeline_warnings:
+                pipeline_warnings.append(w)
+
         _, order_warnings = run_order_check(
             docx_path=docx_file,
             payload_items=payload_json.get("items", []),
@@ -714,6 +726,7 @@ def run_pipeline(
             indesign_result=indesign_result,
             pipeline_warnings=pipeline_warnings,
             output_files=output_files,
+            math_stats=math_stats,
         )
 
         with open(report_file, "w", encoding="utf-8") as f:

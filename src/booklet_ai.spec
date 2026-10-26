@@ -94,6 +94,7 @@ hiddenimports = [
     "app.core",
     "app.core.docx_extractor",
     "app.core.exceptions",
+    "app.core.math_renderer",
     "app.core.models",
     "app.core.pdf_extractor",
     "app.core.pricing_engine",

@@ -459,6 +459,7 @@ def _raise_typed_error(error_msg: str, original_exc: Optional[Exception] = None)
         InvalidBodyFrameGeometryError,
         MarginConfigError,
         MasterNotFoundError,
+        MathPlaceError,
         MissingFontError,
         RTLTableUnsupportedError,
         StyleConfigError,
@@ -467,7 +468,9 @@ def _raise_typed_error(error_msg: str, original_exc: Optional[Exception] = None)
     )
 
     msg_lower = error_msg.lower()
-    if "glyphcoverageerror" in msg_lower:
+    if "mathplaceerror" in msg_lower:
+        raise MathPlaceError(error_msg) from original_exc
+    elif "glyphcoverageerror" in msg_lower:
         raise GlyphCoverageError(error_msg) from original_exc
     elif "missingfonterror" in msg_lower:
         raise MissingFontError(error_msg) from original_exc
