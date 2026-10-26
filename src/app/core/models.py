@@ -132,6 +132,7 @@ class TableData(BaseModel):
         headers: Column header strings.
         rows: 2D list of cell content strings.
         source_bbox: Optional bounding box [x0, y0, x1, y1] from PDF extraction.
+        body_index: Optional index of the body child in DOCX extraction.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -140,6 +141,7 @@ class TableData(BaseModel):
     headers: List[str]
     rows: List[List[str]]
     source_bbox: Optional[List[float]] = None
+    body_index: Optional[int] = None
 
 
 class PageData(BaseModel):

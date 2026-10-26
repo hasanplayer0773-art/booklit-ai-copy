@@ -481,7 +481,14 @@ class DocxContentExtractor:
                 has_content = bool(p_text.strip() or math_inside)
                 br_count = len(child.findall(f".//{W_BR}"))
 
-                new_blocks = self._extract_paragraph(child, block_counter)
+                raw_blocks = self._extract_paragraph(child, block_counter)
+                new_blocks = []
+                for sub_idx, b in enumerate(raw_blocks):
+                    pos = dict(b.source_position)
+                    pos["body_index"] = child_idx
+                    pos["sub_index"] = sub_idx
+                    new_blocks.append(b.model_copy(update={"source_position": pos}))
+
                 produced_ids = [b.block_id for b in new_blocks]
                 for b in new_blocks:
                     blocks.append(b)
@@ -500,7 +507,7 @@ class DocxContentExtractor:
             elif tag == W_TBL:
                 # Table
                 table_counter += 1
-                tbl = self._extract_table(child, table_counter)
+                tbl = self._extract_table(child, table_counter, body_index=child_idx)
                 tables.append(tbl)
 
                 tbl_pr = child.find(W_TBLPR)
@@ -534,7 +541,14 @@ class DocxContentExtractor:
 
             elif tag == W_DRAWING or tag == W_PICT:
                 # Drawing/image at body level (STEP-6.4)
-                img_blocks = self._extract_images_from_element(child, block_counter)
+                raw_img_blocks = self._extract_images_from_element(child, block_counter)
+                img_blocks = []
+                for sub_idx, b in enumerate(raw_img_blocks):
+                    pos = dict(b.source_position)
+                    pos["body_index"] = child_idx
+                    pos["sub_index"] = sub_idx
+                    img_blocks.append(b.model_copy(update={"source_position": pos}))
+
                 produced_ids = [b.block_id for b in img_blocks]
                 for b in img_blocks:
                     blocks.append(b)
@@ -552,7 +566,14 @@ class DocxContentExtractor:
 
             else:
                 # Check for OLE objects at body level
-                ole_blocks = self._detect_ole_objects(child, block_counter)
+                raw_ole_blocks = self._detect_ole_objects(child, block_counter)
+                ole_blocks = []
+                for sub_idx, b in enumerate(raw_ole_blocks):
+                    pos = dict(b.source_position)
+                    pos["body_index"] = child_idx
+                    pos["sub_index"] = sub_idx
+                    ole_blocks.append(b.model_copy(update={"source_position": pos}))
+
                 produced_ids = [b.block_id for b in ole_blocks]
                 for b in ole_blocks:
                     blocks.append(b)
@@ -1034,7 +1055,7 @@ class DocxContentExtractor:
         return blocks
 
     def _extract_table(
-        self, tbl_elem: ET._Element, table_idx: int
+        self, tbl_elem: ET._Element, table_idx: int, body_index: Optional[int] = None
     ) -> TableData:
         """Extract a w:tbl element into a TableData model.
 
@@ -1044,6 +1065,7 @@ class DocxContentExtractor:
         Args:
             tbl_elem: A w:tbl XML element.
             table_idx: Counter for generating table_id.
+            body_index: Optional index of the body child in DOCX extraction.
 
         Returns:
             TableData with headers and rows.
@@ -1090,6 +1112,7 @@ class DocxContentExtractor:
             table_id=f"tbl_{table_idx:04d}",
             headers=headers,
             rows=data_rows,
+            body_index=body_index,
         )
 
     def _detect_ole_objects(

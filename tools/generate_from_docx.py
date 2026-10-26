@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import logging
 import os
@@ -241,6 +242,98 @@ def run_coverage_audit(
         print("  [✓] Text-coverage check PASSED: 100% source text preserved (0 characters lost)")
 
     return audit_rows, audit_warnings, text_loss
+
+
+def run_order_check(
+    docx_path: Union[str, Path],
+    payload_items: List[Dict[str, Any]],
+) -> Tuple[bool, List[str]]:
+    """Compare sequence of item types in payload against sequence of body elements in source.
+
+    Compares semantic sequence: paragraph blocks / table / equation.
+    On mismatch adds warning ORDER_MISMATCH. Prints 'ORDER_CHECK: OK' on match.
+
+    Returns:
+        Tuple of (is_ok: bool, warnings: List[str]).
+    """
+    p = Path(docx_path).resolve()
+    doc = DocxDocument(str(p))
+    body = doc.element.body
+
+    source_seq: List[str] = []
+    for child in body:
+        tag = child.tag
+        if tag.endswith("sectPr"):
+            continue
+        if tag.endswith("tbl"):
+            source_seq.append("table")
+        elif tag.endswith("p"):
+            p_items: List[str] = []
+            for p_child in child:
+                ctag = p_child.tag
+                if ctag.endswith("oMath") or ctag.endswith("oMathPara") or ctag.endswith("object"):
+                    p_items.append("equation")
+                elif ctag.endswith("drawing") or ctag.endswith("pict"):
+                    p_items.append("drawing")
+                elif ctag.endswith("r"):
+                    if any(e.tag.endswith("oMath") or e.tag.endswith("object") for e in p_child.iter()):
+                        p_items.append("equation")
+                    elif any(e.tag.endswith("drawing") or e.tag.endswith("pict") for e in p_child.iter()):
+                        p_items.append("drawing")
+                    else:
+                        t = "".join(e.text for e in p_child.iter() if e.tag.endswith("t") and e.text).strip()
+                        if t:
+                            p_items.append("paragraph")
+                else:
+                    t = "".join(e.text for e in p_child.iter() if e.tag.endswith("t") and e.text).strip()
+                    if t:
+                        p_items.append("paragraph")
+
+            collapsed_p = [k for k, _ in itertools.groupby(p_items)]
+            source_seq.extend(collapsed_p)
+
+    source_collapsed = [k for k, _ in itertools.groupby(source_seq)]
+
+    payload_seq: List[str] = []
+    for item in payload_items:
+        i_type = item.get("item_type")
+        b_type = item.get("block_type")
+        if i_type == "table" or (not b_type and ("headers" in item or "table_id" in item)):
+            payload_seq.append("table")
+        elif b_type in ("math_formula", "legacy_equation_placeholder"):
+            payload_seq.append("equation")
+        elif b_type in ("image_prompt", "image_asset"):
+            payload_seq.append("drawing")
+        else:
+            payload_seq.append("paragraph")
+
+    payload_collapsed = [k for k, _ in itertools.groupby(payload_seq)]
+
+    # Check non-decreasing body_index if available
+    body_indices = [
+        item.get("source_position", {}).get("body_index")
+        if item.get("item_type") == "block"
+        else item.get("body_index")
+        for item in payload_items
+    ]
+    is_monotonic = True
+    if payload_items and all(idx is not None for idx in body_indices):
+        is_monotonic = all(
+            body_indices[i] <= body_indices[i + 1]
+            for i in range(len(body_indices) - 1)
+        )
+
+    is_ok = (source_collapsed == payload_collapsed) and is_monotonic
+    warnings: List[str] = []
+
+    print("\n── Document Order Verification (ORDER_CHECK) ────────────────────────")
+    if is_ok:
+        print("ORDER_CHECK: OK")
+    else:
+        warnings.append("ORDER_MISMATCH")
+        print(f"  [!] Warning: ORDER_MISMATCH (source: {source_collapsed} vs payload: {payload_collapsed}, monotonic={is_monotonic})")
+
+    return is_ok, warnings
 
 
 def classify_document(
@@ -566,6 +659,15 @@ def run_pipeline(
         )
         payload_time = time.perf_counter() - t0_payload
         print(f"[✓] Payload JSON created: {payload_path} ({payload_time:.3f}s)")
+
+        # ── Stage 3b: ORDER_CHECK Verification ──────────────────────────
+        with open(payload_path, "r", encoding="utf-8") as f:
+            payload_json = json.load(f)
+        _, order_warnings = run_order_check(
+            docx_path=docx_file,
+            payload_items=payload_json.get("items", []),
+        )
+        pipeline_warnings.extend(order_warnings)
 
         indesign_result: Optional[Dict[str, Any]] = None
         indesign_time = 0.0

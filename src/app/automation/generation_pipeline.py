@@ -106,10 +106,6 @@ def build_payload(
             }
             blocks_list.append(b_dict)
             p_blocks.append(b_dict)
-            items_list.append({
-                "item_type": "block",
-                **b_dict,
-            })
 
         p_tables: List[Dict[str, Any]] = []
         for t in page.tables:
@@ -118,13 +114,86 @@ def build_payload(
                 "headers": list(t.headers),
                 "rows": [list(row) for row in t.rows],
                 "source_bbox": t.source_bbox,
+                "body_index": t.body_index,
             }
             tables_list.append(t_dict)
             p_tables.append(t_dict)
-            items_list.append({
-                "item_type": "table",
-                **t_dict,
-            })
+
+        total_page_items = len(page.content_blocks) + len(page.tables)
+
+        # 1. Merge and sort by (body_index, sub_index) when ALL items have body_index
+        all_have_body_index = (
+            total_page_items > 0
+            and all(
+                isinstance(b.source_position, dict)
+                and b.source_position.get("body_index") is not None
+                for b in page.content_blocks
+            )
+            and all(t.body_index is not None for t in page.tables)
+        )
+
+        def _get_block_y0(cb: ContentBlock) -> Optional[float]:
+            sp = cb.source_position or {}
+            bbox = sp.get("bbox") or sp.get("source_bbox")
+            if bbox is not None and len(bbox) >= 2:
+                try:
+                    return float(bbox[1])
+                except (ValueError, TypeError):
+                    return None
+            return None
+
+        def _get_table_y0(td: TableData) -> Optional[float]:
+            bbox = td.source_bbox
+            if bbox is not None and len(bbox) >= 2:
+                try:
+                    return float(bbox[1])
+                except (ValueError, TypeError):
+                    return None
+            return None
+
+        all_have_y0 = (
+            total_page_items > 0
+            and all(_get_block_y0(b) is not None for b in page.content_blocks)
+            and all(_get_table_y0(t) is not None for t in page.tables)
+        )
+
+        if all_have_body_index:
+            page_ordered_items: List[Tuple[Tuple[int, int], Dict[str, Any]]] = []
+            for b, b_dict in zip(page.content_blocks, p_blocks):
+                b_idx = int(b.source_position.get("body_index", 0))
+                s_idx = int(b.source_position.get("sub_index", 0))
+                page_ordered_items.append(((b_idx, s_idx), {"item_type": "block", **b_dict}))
+            for t, t_dict in zip(page.tables, p_tables):
+                b_idx = int(t.body_index) if t.body_index is not None else 0
+                page_ordered_items.append(((b_idx, 0), {"item_type": "table", **t_dict}))
+            page_ordered_items.sort(key=lambda x: x[0])
+            for _, item in page_ordered_items:
+                items_list.append(item)
+
+        elif all_have_y0:
+            page_y0_items: List[Tuple[float, Dict[str, Any]]] = []
+            for b, b_dict in zip(page.content_blocks, p_blocks):
+                y0 = _get_block_y0(b)
+                page_y0_items.append((y0 if y0 is not None else 0.0, {"item_type": "block", **b_dict}))
+            for t, t_dict in zip(page.tables, p_tables):
+                y0 = _get_table_y0(t)
+                page_y0_items.append((y0 if y0 is not None else 0.0, {"item_type": "table", **t_dict}))
+            page_y0_items.sort(key=lambda x: x[0])
+            for _, item in page_y0_items:
+                items_list.append(item)
+
+        else:
+            # Fallback: keep current behaviour (blocks first, then tables)
+            for b_dict in p_blocks:
+                items_list.append({
+                    "item_type": "block",
+                    **b_dict,
+                })
+            for t_dict in p_tables:
+                items_list.append({
+                    "item_type": "table",
+                    **t_dict,
+                })
 
         pages_list.append({
             "page_number": page.page_number,
