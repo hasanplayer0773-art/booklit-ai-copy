@@ -22,6 +22,11 @@ from pathlib import Path
 from typing import Any, Dict, List
 import pytest
 
+try:
+    from tests.conftest import requires_xslt
+except ImportError:
+    from conftest import requires_xslt
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -105,6 +110,7 @@ def test_table_data_body_index_model():
     assert t_indexed.body_index == 3
 
 
+@requires_xslt
 def test_docx_extractor_body_index_assignment(docx_order_fixture: Path):
     """Requirement 2: DocxContentExtractor sets body_index on every block and table."""
     extractor = DocxContentExtractor()
@@ -140,6 +146,7 @@ def test_docx_extractor_body_index_assignment(docx_order_fixture: Path):
         verify_text_integrity(b.raw_content, b.content_hash, context=b.block_id)
 
 
+@requires_xslt
 def test_build_payload_preserves_document_order(docx_order_fixture: Path, tmp_path: Path):
     """Requirement 3 & 5: Payload items are ordered [block..., table, block..., math]."""
     extractor = DocxContentExtractor()
@@ -244,6 +251,7 @@ def test_build_payload_no_body_index_keeps_old_behaviour(tmp_path: Path):
     assert items[2]["table_id"] == "tbl_0001"
 
 
+@requires_xslt
 def test_order_check_ok(docx_order_fixture: Path, tmp_path: Path, capsys):
     """Requirement 4: run_order_check prints ORDER_CHECK: OK when order matches."""
     extractor = DocxContentExtractor()
@@ -270,6 +278,7 @@ def test_order_check_ok(docx_order_fixture: Path, tmp_path: Path, capsys):
     assert "ORDER_CHECK: OK" in captured.out
 
 
+@requires_xslt
 def test_order_check_detects_mismatch(docx_order_fixture: Path, tmp_path: Path, capsys):
     """Requirement 4: run_order_check adds ORDER_MISMATCH on swapped order."""
     extractor = DocxContentExtractor()
@@ -301,6 +310,7 @@ def test_order_check_detects_mismatch(docx_order_fixture: Path, tmp_path: Path, 
     assert "ORDER_MISMATCH" in captured.out
 
 
+@requires_xslt
 def test_run_pipeline_end_to_end_order(docx_order_fixture: Path, tmp_path: Path, capsys):
     """Full CLI pipeline on order fixture passes order check with 0 exit code."""
     out_dir = tmp_path / "cli_out"

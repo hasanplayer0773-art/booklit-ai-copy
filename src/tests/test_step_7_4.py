@@ -179,8 +179,16 @@ class TestMathMLRenderer:
         assert "<path" in result_path.read_text(encoding="utf-8")
 
     def test_invalid_mathml_raises_math_render_error(self, tmp_path: Path):
-        """Invalid, broken, or empty MathML raises typed MathRenderError."""
+        """Invalid, broken, or non-math XML raises typed MathRenderError."""
         out_svg = tmp_path / "invalid.svg"
+
+        # Non-XML string "hello"
+        with pytest.raises(MathRenderError):
+            render_mathml_to_svg("hello", out_svg)
+
+        # XML with root other than 'math' ("<a/>")
+        with pytest.raises(MathRenderError):
+            render_mathml_to_svg("<a/>", out_svg)
 
         # Empty string
         with pytest.raises(MathRenderError):

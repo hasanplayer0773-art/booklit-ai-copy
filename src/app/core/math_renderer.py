@@ -22,24 +22,14 @@ from app.core.exceptions import MathRenderError
 logger = logging.getLogger(__name__)
 
 
-def normalize_mathml(mathml: str) -> str:
-    """Normalize MathML markup to ensure robust parsing across various sources.
-
-    Handles:
-    - Namespace prefixes such as <mml:math ...> or <mml:mi> (removes 'mml:' prefix).
-    - Missing or redundant XML declarations.
-    - Missing <math> root tag wrapper.
-    - Ensures standard MathML namespace 'http://www.w3.org/1998/Math/MathML'.
-    - Supports <mfenced> elements natively.
+def validate_mathml_root(mathml: str) -> None:
+    """Parse the input as XML and require the root element local-name to be 'math' (any namespace prefix).
 
     Args:
-        mathml: Raw MathML markup string.
-
-    Returns:
-        Cleaned, well-formed MathML string.
+        mathml: MathML string to validate.
 
     Raises:
-        MathRenderError: If input is empty or fundamentally invalid.
+        MathRenderError: If input is not valid XML or root element local-name is not 'math'.
     """
     if not mathml or not isinstance(mathml, str):
         raise MathRenderError("MathML input is empty or not a string")
@@ -51,16 +41,62 @@ def normalize_mathml(mathml: str) -> str:
     # Strip XML declaration (e.g. <?xml version="1.0" ... ?>)
     s = re.sub(r"<\?xml[^>]*\?>", "", s).strip()
 
+    try:
+        root = ET.fromstring(s)
+    except Exception:
+        # Check if namespace prefix declaration was missing (e.g. <mml:math> without xmlns:mml)
+        s_declared = re.sub(
+            r"<([a-zA-Z0-9_]+):([a-zA-Z0-9_]+)(?=[\s>])",
+            r'<\1:\2 xmlns:\1="http://www.w3.org/1998/Math/MathML"',
+            s,
+            count=1,
+        )
+        try:
+            root = ET.fromstring(s_declared)
+        except Exception as exc:
+            raise MathRenderError(f"MathML input is not valid XML: {exc}") from exc
+
+    tag = root.tag
+    local_name = tag.split("}")[-1] if "}" in tag else tag
+    if ":" in local_name:
+        local_name = local_name.split(":")[-1]
+
+    if local_name.lower() != "math":
+        raise MathRenderError(
+            f"Expected MathML root element to be 'math', got '{local_name}'"
+        )
+
+
+def normalize_mathml(mathml: str) -> str:
+    """Normalize MathML markup to ensure robust parsing across various sources.
+
+    Validates that the input is valid XML with root element local-name 'math',
+    then normalizes namespace prefixes (<mml:math> -> <math>) and ensures the
+    standard MathML namespace is declared.
+
+    Args:
+        mathml: Raw MathML markup string.
+
+    Returns:
+        Cleaned, well-formed MathML string.
+
+    Raises:
+        MathRenderError: If input is empty, not valid XML, or root element is not 'math'.
+    """
+    validate_mathml_root(mathml)
+
+    s = mathml.strip()
+    # Strip XML declaration (e.g. <?xml version="1.0" ... ?>)
+    s = re.sub(r"<\?xml[^>]*\?>", "", s).strip()
+
     # Normalize namespace prefixes: <mml:foo -> <foo and </mml:foo -> </foo
     s = re.sub(r"<(/?)mml:", r"<\1", s)
 
     # Remove xmlns:mml="..." attribute if present to avoid syntax issues after stripping prefix
     s = re.sub(r'\s+xmlns:mml=(["\'][^"\']*["\'])', "", s)
 
-    # Ensure <math> root element wrapper
-    if not s.startswith("<math"):
-        s = f'<math xmlns="http://www.w3.org/1998/Math/MathML">{s}</math>'
-    elif "xmlns=" not in s:
+    # Ensure default MathML namespace on root <math> tag
+    if "xmlns=" not in s:
         s = s.replace("<math", '<math xmlns="http://www.w3.org/1998/Math/MathML"', 1)
 
     return s
@@ -75,9 +111,10 @@ def render_mathml_to_svg(
 
     Uses ziamath.Math(mathml, size=size_pt).svg() to produce pure vector paths
     with embedded glyph data, requiring no external LaTeX distribution or InDesign fonts.
+    Parses the input as XML and requires the root element local-name to be 'math'.
 
     Args:
-        mathml: MathML string (supports <mml:...>, <mfenced>, etc.).
+        mathml: MathML string (supports <mml:math>, <mfenced>, etc.).
         out_path: File system path where the SVG file will be written.
         size_pt: Target font size in typographical points (pt). Defaults to 12.0.
 
@@ -85,7 +122,7 @@ def render_mathml_to_svg(
         Resolved Path to the created SVG file.
 
     Raises:
-        MathRenderError: If parsing or rendering fails.
+        MathRenderError: If parsing or rendering fails, or root element is not 'math'.
     """
     try:
         norm_mathml = normalize_mathml(mathml)

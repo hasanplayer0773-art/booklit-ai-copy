@@ -27,6 +27,11 @@ if str(PROJECT_ROOT) not in sys.path:
 import pytest
 from docx import Document as DocxDocument
 
+try:
+    from tests.conftest import requires_xslt
+except ImportError:
+    from conftest import requires_xslt
+
 from app.core.models import BookletDocument, ContentBlock, PageData, TableData
 from app.core.text_integrity import compute_canonical_hash
 from tools.generate_from_docx import (
@@ -545,6 +550,7 @@ class TestLineBreaks:
         assert doc_model.pages[0].content_blocks[0].raw_content == "نص قبل فاصل الصفحات ونص مستمر بعد الفاصل."
 
 
+@requires_xslt
 class TestMathMLWarning:
     def test_mathml_not_renderable_warning_emitted(self, equivalent_test1_docx_fixture: Path):
         """MathML equations emit MATHML_NOT_RENDERABLE warning."""
@@ -559,6 +565,7 @@ class TestMathMLWarning:
 
 
 class TestCoverageAudit:
+    @requires_xslt
     def test_coverage_audit_rows_structure(self, equivalent_test1_docx_fixture: Path):
         """Verify coverage audit generates required structure for paragraphs and tables."""
         from app.core.docx_extractor import DocxContentExtractor
@@ -590,6 +597,7 @@ class TestCoverageAudit:
         assert p2_audit["is_empty"] is True
         assert p2_audit["blocks"] == []
 
+    @requires_xslt
     def test_text_coverage_check_on_test1(self, equivalent_test1_docx_fixture: Path):
         """Verify text-coverage check passes with zero loss on equivalent fixture."""
         from app.core.docx_extractor import DocxContentExtractor

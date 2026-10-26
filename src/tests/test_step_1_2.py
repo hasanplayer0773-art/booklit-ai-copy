@@ -46,15 +46,12 @@ V_NS = NSMAP["v"]
 O_NS = NSMAP["o"]
 
 # ─── XSLT availability check ──────────────────────────────────────────
-_XSLT_CANDIDATES = [
-    "assets/xslt/OMML2MML.XSL",
-    r"C:\Program Files\Microsoft Office\root\Office16\OMML2MML.XSL",
-    r"C:\Program Files (x86)\Microsoft Office\root\Office16\OMML2MML.XSL",
-    r"C:\Program Files\Microsoft Office\Office16\OMML2MML.XSL",
-    r"C:\Program Files (x86)\Microsoft Office\Office16\OMML2MML.XSL",
-]
+try:
+    from tests.conftest import is_xslt_available, requires_xslt
+except ImportError:
+    from conftest import is_xslt_available, requires_xslt
 
-XSLT_AVAILABLE = any(os.path.isfile(p) for p in _XSLT_CANDIDATES)
+XSLT_AVAILABLE = is_xslt_available()
 
 
 # ═══════════════════════════════════════════════════════════════════════
