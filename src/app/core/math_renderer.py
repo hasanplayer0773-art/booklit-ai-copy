@@ -102,6 +102,29 @@ def normalize_mathml(mathml: str) -> str:
     return s
 
 
+def _replace_ascii_minus(root: ET.Element) -> None:
+    """Replace ASCII minus '-' with Unicode minus '\u2212' in <mo> and leading <mn>.
+
+    Works around a bug in ziamath 0.13 where ziamath.escapes.unescape() runs greedy regexes:
+    - re.sub(r'<mo.*>\\s*-\\s*</mo>', '<mo> − </mo>', xml)
+    - re.sub(r'<mn.*>\\s*-', '<mn>−', xml)
+    The '.*' is greedy, causing content between the first <mo>/<mn> and the minus sign to be
+    deleted when passed a string (producing mismatched tag errors or silent content loss).
+    By replacing ASCII minus directly on the ElementTree and passing the Element to ziamath.Math,
+    ziamath's unescape() is never called.
+    """
+    for elem in root.iter():
+        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        if tag == "mo":
+            if elem.text is not None and elem.text.strip() == "-":
+                elem.text = "\u2212"
+        elif tag == "mn":
+            if elem.text is not None and elem.text.lstrip().startswith("-"):
+                lstripped = elem.text.lstrip()
+                leading_spaces = elem.text[: len(elem.text) - len(lstripped)]
+                elem.text = leading_spaces + "\u2212" + lstripped[1:]
+
+
 def render_mathml_to_svg(
     mathml: str,
     out_path: Union[Path, str],
@@ -109,9 +132,10 @@ def render_mathml_to_svg(
 ) -> Path:
     """Render a MathML equation string into a standalone SVG vector image file.
 
-    Uses ziamath.Math(mathml, size=size_pt).svg() to produce pure vector paths
+    Uses ziamath.Math(element, size=size_pt).svg() to produce pure vector paths
     with embedded glyph data, requiring no external LaTeX distribution or InDesign fonts.
-    Parses the input as XML and requires the root element local-name to be 'math'.
+    Parses the input as XML, requires the root element local-name to be 'math',
+    and passes the parsed ElementTree Element to bypass ziamath's greedy unescape regex bug.
 
     Args:
         mathml: MathML string (supports <mml:math>, <mfenced>, etc.).
@@ -126,7 +150,9 @@ def render_mathml_to_svg(
     """
     try:
         norm_mathml = normalize_mathml(mathml)
-        math_obj = zm.Math(norm_mathml, size=float(size_pt))
+        root = ET.fromstring(norm_mathml)
+        _replace_ascii_minus(root)
+        math_obj = zm.Math(root, size=float(size_pt))
         svg_content = math_obj.svg()
 
         if isinstance(svg_content, bytes):
