@@ -71,6 +71,12 @@ function applyQuestionCallout(targetRange, colors, styles) {
         styles.ministryQuestionStyle, false
     );
 
+    // Padding offsets for both paragraph shading and border
+    var TOP_OFFSET = 4.0;
+    var BOTTOM_OFFSET = 4.0;
+    var LEFT_OFFSET = 6.0;
+    var RIGHT_OFFSET = 6.0;
+
     // Apply callout formatting to each paragraph individually
     var pElements = targetRange.paragraphs.everyItem().getElements();
     for (var i = 0; i < pElements.length; i++) {
@@ -84,8 +90,17 @@ function applyQuestionCallout(targetRange, colors, styles) {
         // Uses paragraph border-and-shading feature — reflow-safe,
         // unlike an anchored/drawn rectangle.
         p.paragraphBorderOn = true;
+        p.paragraphBorderTopLineWeight = 0;
+        p.paragraphBorderBottomLineWeight = 0;
+        p.paragraphBorderLeftLineWeight = 0;
         p.paragraphBorderRightLineWeight = 3.0;
         p.paragraphBorderColor = colors.primaryColor;
+
+        // Border offsets so the shaded area has padding and the text does not touch the edges
+        p.paragraphBorderTopOffset = TOP_OFFSET;
+        p.paragraphBorderBottomOffset = BOTTOM_OFFSET;
+        p.paragraphBorderLeftOffset = LEFT_OFFSET;
+        p.paragraphBorderRightOffset = RIGHT_OFFSET;
 
         // Light background tint for visual hierarchy
         p.paragraphShadingOn = true;
@@ -93,10 +108,10 @@ function applyQuestionCallout(targetRange, colors, styles) {
         p.paragraphShadingTint = 8.0;
 
         // Padding inside the shading box
-        p.paragraphShadingTopOffset = 4.0;
-        p.paragraphShadingBottomOffset = 4.0;
-        p.paragraphShadingLeftOffset = 6.0;
-        p.paragraphShadingRightOffset = 6.0;
+        p.paragraphShadingTopOffset = TOP_OFFSET;
+        p.paragraphShadingBottomOffset = BOTTOM_OFFSET;
+        p.paragraphShadingLeftOffset = LEFT_OFFSET;
+        p.paragraphShadingRightOffset = RIGHT_OFFSET;
     }
 }
 
