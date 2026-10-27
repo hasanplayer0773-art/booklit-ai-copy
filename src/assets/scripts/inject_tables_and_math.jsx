@@ -38,6 +38,11 @@
 
 // ─── Math Formula Injection ───────────────────────────────────────────
 
+// Vertical spacing before inline math equations to prevent collisions with preceding elements (e.g. tables).
+var MATH_SPACE_BEFORE_PT = 10.0;
+// Vertical spacing after inline math equations before subsequent paragraph content.
+var MATH_SPACE_AFTER_PT = 8.0;
+
 /**
  * Inject a math/formula block into the story with strict LTR direction.
  *
@@ -144,6 +149,8 @@ function injectMathFormulaBlock(story, mathItemOrText, styles) {
             targetRange.paragraphs.everyItem().justification =
                 Justification.CENTER_ALIGN;
         }
+        targetRange.paragraphs.everyItem().spaceBefore = MATH_SPACE_BEFORE_PT;
+        targetRange.paragraphs.everyItem().spaceAfter = MATH_SPACE_AFTER_PT;
 
     } else {
         // Placeholder or legacy text mode — NEVER raw XML
@@ -182,6 +189,8 @@ function injectMathFormulaBlock(story, mathItemOrText, styles) {
             targetRange.paragraphs.everyItem().justification =
                 Justification.CENTER_ALIGN;
         }
+        targetRange.paragraphs.everyItem().spaceBefore = MATH_SPACE_BEFORE_PT;
+        targetRange.paragraphs.everyItem().spaceAfter = MATH_SPACE_AFTER_PT;
     }
 }
 
