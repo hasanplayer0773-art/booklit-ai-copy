@@ -80,6 +80,15 @@ function injectMathFormulaBlock(story, mathItemOrText, styles) {
         // 1. Insert inline anchored rectangle at current insertion point
         var rect = story.insertionPoints[-1].rectangles.add();
 
+        // Remove default frame appearance (no stroke, transparent fill)
+        rect.strokeWeight = 0;
+        var noneSwatch = app.activeDocument.swatches.itemByName("None");
+        if (!noneSwatch || !noneSwatch.isValid) {
+            throw new Error("InvalidSwatchError: 'None' swatch not found in active document");
+        }
+        rect.strokeColor = app.activeDocument.swatches.itemByName("None");
+        rect.fillColor = app.activeDocument.swatches.itemByName("None");
+
         // 2. Configure inline anchoring
         if (rect.anchoredObjectSettings) {
             if (typeof AnchorPosition !== "undefined" && AnchorPosition.INLINE_POSITION) {

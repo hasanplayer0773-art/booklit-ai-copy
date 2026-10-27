@@ -17,6 +17,10 @@ import xml.etree.ElementTree as ET
 
 import ziamath as zm
 
+# Disable SVG2 (<symbol> + <use>) output so InDesign's SVG import engine
+# receives plain <path> elements and renders glyphs correctly.
+zm.config.svg2 = False
+
 from app.core.exceptions import MathRenderError
 
 logger = logging.getLogger(__name__)
