@@ -6,6 +6,8 @@ This module is the single source of truth for exception types
 referenced across extraction, classification, and automation layers.
 """
 
+from typing import Optional
+
 
 class BookletError(Exception):
     """Base exception for Booklet_AI core.
