@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import tempfile
+import unicodedata
 import uuid
 import zipfile
 from typing import Any, Dict, List, Optional, Tuple
@@ -390,6 +391,19 @@ def _assemble_chemistry_text(run_info: list, start: int, end: int) -> str:
             parts.append(text)
 
     return "".join(parts)
+
+
+def _has_non_punctuation_or_operator_content(text: str) -> bool:
+    """Return True if text contains characters other than whitespace,
+    punctuation, operators/symbols, or digits (coefficients)."""
+    for ch in text:
+        if ch.isspace() or ch.isdigit():
+            continue
+        cat = unicodedata.category(ch)
+        if cat.startswith("P") or cat.startswith("S"):
+            continue
+        return True
+    return False
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -775,10 +789,12 @@ class DocxContentExtractor:
     ) -> List[ContentBlock]:
         """Analyze accumulated runs and produce ContentBlock(s).
 
-        Checks for chemistry patterns first. If chemistry is detected,
-        the chemistry span becomes a chemistry_formula block and any
-        surrounding text becomes separate arabic_text blocks. Otherwise,
-        all text becomes a single block.
+        Preserves ALL text in source order within exactly ONE block per run group.
+        For runs inside a chemistry span, uses the assembled Unicode sub/superscript
+        text; for every other run, uses its plain run text.
+        Block type is 'chemistry_formula' only when the text outside the chemistry
+        spans is empty after removing whitespace and punctuation/operator characters;
+        otherwise 'arabic_text' (or 'chapter_header' if heading_level is set).
 
         Args:
             runs: Accumulated w:r elements.
@@ -787,69 +803,59 @@ class DocxContentExtractor:
             start_idx: Block counter for IDs.
 
         Returns:
-            List of ContentBlock instances.
+            List containing exactly one ContentBlock (or empty list if whitespace-only).
         """
         full_text = "".join(text_parts)
         if not full_text.strip():
             return []
 
-        blocks: List[ContentBlock] = []
-        idx = start_idx
-
         # Check for chemistry patterns
         chem_spans = _analyze_runs_for_chemistry(runs)
 
         if chem_spans:
-            # We have chemistry — emit chemistry blocks
-            # For simplicity, if chemistry is detected in the paragraph,
-            # the whole paragraph with chemistry content is treated as
-            # chemistry_formula
-            for _start, _end, assembled in chem_spans:
-                if assembled.strip():
-                    block = ContentBlock(
-                        block_id=f"blk_{idx:04d}",
-                        block_type="chemistry_formula",
-                        raw_content=assembled,
-                        content_hash=compute_canonical_hash(assembled),
-                        source_position={"type": "chemistry_runs"},
-                    )
-                    blocks.append(block)
-                    idx += 1
+            span_map = {start: (end, assembled) for start, end, assembled in chem_spans}
+            assembled_parts: List[str] = []
+            outside_parts: List[str] = []
+            i = 0
+            while i < len(runs):
+                if i in span_map:
+                    end, assembled = span_map[i]
+                    assembled_parts.append(assembled)
+                    i = end + 1
+                else:
+                    r_text = _get_run_text(runs[i])
+                    assembled_parts.append(r_text)
+                    outside_parts.append(r_text)
+                    i += 1
 
-            # If there's remaining text not covered by chemistry,
-            # treat it as regular text
-            if not blocks:
-                # Fallback: no valid chemistry found after all
-                block_type: BlockType = (
-                    "chapter_header" if heading_level else "arabic_text"
-                )
-                block = ContentBlock(
-                    block_id=f"blk_{idx:04d}",
-                    block_type=block_type,
-                    raw_content=full_text,
-                    content_hash=compute_canonical_hash(full_text),
-                    source_position={"heading_level": heading_level}
-                    if heading_level
-                    else {},
-                )
-                blocks.append(block)
+            raw_content = "".join(assembled_parts)
+            if not raw_content.strip():
+                return []
+
+            outside_text = "".join(outside_parts)
+            is_pure_chem = not _has_non_punctuation_or_operator_content(outside_text)
+
+            if is_pure_chem and not heading_level:
+                block_type: BlockType = "chemistry_formula"
+                source_position = {"type": "chemistry_runs"}
+            else:
+                block_type = "chapter_header" if heading_level else "arabic_text"
+                source_position = {"heading_level": heading_level} if heading_level else {}
         else:
-            # Plain text or heading
+            raw_content = full_text
             block_type = (
                 "chapter_header" if heading_level else "arabic_text"
             )
-            block = ContentBlock(
-                block_id=f"blk_{idx:04d}",
-                block_type=block_type,
-                raw_content=full_text,
-                content_hash=compute_canonical_hash(full_text),
-                source_position={"heading_level": heading_level}
-                if heading_level
-                else {},
-            )
-            blocks.append(block)
+            source_position = {"heading_level": heading_level} if heading_level else {}
 
-        return blocks
+        block = ContentBlock(
+            block_id=f"blk_{start_idx:04d}",
+            block_type=block_type,
+            raw_content=raw_content,
+            content_hash=compute_canonical_hash(raw_content),
+            source_position=source_position,
+        )
+        return [block]
 
     def _convert_omath_block(
         self, omath_elem: ET._Element, idx: int

@@ -175,19 +175,22 @@ def run_coverage_audit(
     # ── Text Coverage Check ─────────────────────────────────────────────
     source_paragraphs = [para for para in raw_doc.paragraphs if para.text.strip()]
 
+    def _audit_norm(text: str) -> str:
+        return canonical_normalize_text(text).replace("\u2212", "-")
+
     out_text_blocks = [
         b.raw_content
         for page in booklet_doc.pages
         for b in page.content_blocks
         if not _is_non_text_block(b)
     ]
-    out_canonical_blocks = [canonical_normalize_text(b) for b in out_text_blocks]
+    out_canonical_blocks = [_audit_norm(b) for b in out_text_blocks]
 
     missing_paragraphs: List[str] = []
     for p_idx, para in enumerate(source_paragraphs):
         lines = [line.strip() for line in para.text.split("\n") if line.strip()]
         for line in lines:
-            c_line = canonical_normalize_text(line)
+            c_line = _audit_norm(line)
             if not c_line:
                 continue
             found = any(c_line in ob or ob in c_line for ob in out_canonical_blocks)
@@ -196,7 +199,7 @@ def run_coverage_audit(
                     for t in page.tables:
                         for row in [t.headers] + t.rows:
                             for cell in row:
-                                if c_line in canonical_normalize_text(cell):
+                                if c_line in _audit_norm(cell):
                                     found = True
                                     break
             if not found:
@@ -205,13 +208,13 @@ def run_coverage_audit(
     src_items: List[str] = []
     for para in source_paragraphs:
         for line in para.text.split("\n"):
-            cl = canonical_normalize_text(line)
+            cl = _audit_norm(line)
             if cl:
                 src_items.append(cl)
     for t in raw_doc.tables:
         for row in t.rows:
             for cell in row.cells:
-                cc = canonical_normalize_text(cell.text)
+                cc = _audit_norm(cell.text)
                 if cc:
                     src_items.append(cc)
 
@@ -219,17 +222,17 @@ def run_coverage_audit(
     for page in booklet_doc.pages:
         for b in page.content_blocks:
             if not _is_non_text_block(b):
-                cb = canonical_normalize_text(b.raw_content)
+                cb = _audit_norm(b.raw_content)
                 if cb:
                     out_items.append(cb)
         for t in page.tables:
             for h in t.headers:
-                ch = canonical_normalize_text(h)
+                ch = _audit_norm(h)
                 if ch:
                     out_items.append(ch)
             for r in t.rows:
                 for c in r:
-                    cr = canonical_normalize_text(c)
+                    cr = _audit_norm(c)
                     if cr:
                         out_items.append(cr)
 
