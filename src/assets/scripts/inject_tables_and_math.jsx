@@ -195,6 +195,166 @@ function injectMathFormulaBlock(story, mathItemOrText, styles) {
 }
 
 
+// ─── Real Image Placement (STEP-7.7b) ─────────────────────────────────
+
+// Conversion factor from millimeters to points: 72 points / 25.4 mm
+var MM_TO_PT = 72.0 / 25.4;
+// Fallback DPI for raster image blocks when intended_width_mm is not specified
+var IMAGE_FALLBACK_DPI = 150.0;
+// Vertical spacing before inline image frame
+var IMAGE_SPACE_BEFORE_PT = 8.0;
+// Vertical spacing after inline image frame
+var IMAGE_SPACE_AFTER_PT = 8.0;
+
+/**
+ * Inject an inline image block into the story.
+ *
+ * Implemented per STEP-7.7b:
+ * 1. Checks file existence with File.exists. Throws ImageAssetMissingError if missing.
+ * 2. Computes target dimensions using intended_width_mm or pixel_width at IMAGE_FALLBACK_DPI.
+ * 3. Proportional height strictly follows aspect ratio (pixel_height / pixel_width).
+ * 4. Scales down (never up) proportionally so width <= usableWidthPt and height <= usableHeightPt * 0.9.
+ * 5. Creates inline rectangle at story.insertionPoints[-1], sets stroke to 0 and fill/stroke to "None".
+ * 6. Places image with rect.place(new File(item.image_path)). Throws if place fails or returns nothing.
+ * 7. Sets rectangle bounds to computed dimensions and fits content proportionally (FitOptions.PROPORTIONALLY).
+ * 8. Appends paragraph break (\r) in its own paragraph.
+ * 9. Applies ImagePlaceholderStyle (RTL) with centered alignment, Leading.AUTO, and spacing.
+ *
+ * @param {Story} story - The InDesign story to inject into.
+ * @param {Object} item - Content block item containing image_path, pixel dimensions, etc.
+ * @param {Object} styles - Resolved styles map.
+ * @param {number} usableWidthPt - Usable width of the current text frame in points.
+ * @param {number} usableHeightPt - Usable height of the current text frame in points.
+ */
+function injectImageBlock(story, item, styles, usableWidthPt, usableHeightPt) {
+    var blockId = item.block_id || "unknown";
+    var imgPath = item.image_path || "";
+
+    // 1. File existence check
+    var imgFile = new File(imgPath);
+    if (!imgFile.exists) { // File.exists check
+        throw new Error("ImageAssetMissingError: Image file does not exist at '" + imgPath + "' for block " + blockId);
+    }
+
+    // 2. Sizing calculation
+    var pw = Number(item.pixel_width) || 0;
+    var ph = Number(item.pixel_height) || 0;
+    var aspectRatio = (pw > 0 && ph > 0) ? (ph / pw) : 1.0;
+
+    var targetWidth;
+    if (typeof item.intended_width_mm === "number" && item.intended_width_mm > 0) {
+        targetWidth = item.intended_width_mm * MM_TO_PT;
+    } else if (pw > 0) {
+        targetWidth = pw * 72.0 / IMAGE_FALLBACK_DPI;
+    } else {
+        targetWidth = usableWidthPt;
+    }
+
+    var targetHeight = targetWidth * (pw > 0 ? (ph / pw) : aspectRatio);
+
+    // Scale DOWN (never up) proportionally so width <= usableWidthPt and height <= usableHeightPt * 0.9
+    var maxAllowedWidth = usableWidthPt;
+    var maxAllowedHeight = usableHeightPt * 0.9;
+    var scaleFactor = 1.0;
+
+    if (targetWidth > maxAllowedWidth) {
+        scaleFactor = Math.min(scaleFactor, maxAllowedWidth / targetWidth);
+    }
+    if (targetHeight > maxAllowedHeight) {
+        scaleFactor = Math.min(scaleFactor, maxAllowedHeight / targetHeight);
+    }
+
+    var finalWidth = targetWidth * scaleFactor;
+    var finalHeight = targetHeight * scaleFactor;
+
+    var start = story.insertionPoints[-1].index;
+
+    // 3. Create inline rectangle at current insertion point
+    var rect = story.insertionPoints[-1].rectangles.add();
+
+    // 4. Set stroke weight 0 and stroke/fill colors to "None" swatch
+    rect.strokeWeight = 0;
+    var noneSwatch = app.activeDocument.swatches.itemByName("None");
+    if (!noneSwatch || !noneSwatch.isValid) {
+        throw new Error("InvalidSwatchError: 'None' swatch not found in active document");
+    }
+    rect.strokeColor = noneSwatch;
+    rect.fillColor = noneSwatch;
+
+    // Configure inline anchoring
+    if (rect.anchoredObjectSettings) {
+        if (typeof AnchorPosition !== "undefined" && AnchorPosition.INLINE_POSITION) {
+            rect.anchoredObjectSettings.anchoredPosition = AnchorPosition.INLINE_POSITION;
+        }
+    }
+
+    // 5. Place the image file into the rectangle
+    var placeResult;
+    try {
+        placeResult = rect.place(new File(item.image_path));
+    } catch (placeErr) {
+        throw new Error("ImagePlaceError: failed to place image for block " + blockId + " ('" + item.image_path + "'): " + placeErr.message);
+    }
+    if (!placeResult || (placeResult instanceof Array && placeResult.length === 0)) {
+        throw new Error("ImagePlaceError: place() returned nothing for block " + blockId + " ('" + item.image_path + "')");
+    }
+
+    // 6. Set rectangle bounds to computed dimensions and fit content proportionally
+    var gb = rect.geometricBounds; // [y0, x0, y1, x1]
+    var y0 = gb[0];
+    var x0 = gb[1];
+    rect.geometricBounds = [y0, x0, y0 + finalHeight, x0 + finalWidth];
+    rect.fit(FitOptions.PROPORTIONALLY);
+    if (typeof FitOptions !== "undefined" && FitOptions.CENTER_CONTENT) {
+        rect.fit(FitOptions.CENTER_CONTENT);
+    }
+
+    // Alt text metadata
+    var altText = item.alt_text || "image";
+    if (altText) {
+        rect.label = altText;
+        if (rect.objectExportOptions) {
+            try {
+                if (typeof SourceType !== "undefined" && SourceType.SOURCE_CUSTOM) {
+                    rect.objectExportOptions.altTextSourceType = SourceType.SOURCE_CUSTOM;
+                }
+                rect.objectExportOptions.customAltText = altText;
+            } catch (eAlt) {
+                $.writeln("Image warning: could not set customAltText for " + blockId + ": " + eAlt.message);
+            }
+        }
+    }
+
+    // 7. Paragraph break in its own paragraph
+    story.insertionPoints[-1].contents = "\r";
+    var end = story.insertionPoints[-1].index;
+
+    // 8. Apply ImagePlaceholderStyle with centered alignment, Leading.AUTO, and spacing
+    var targetRange = story.characters.itemByRange(
+        start, Math.max(start, end - 1)
+    );
+    var ipStyle = (styles && (styles.imagePlaceholderStyle || styles.ImagePlaceholderStyle)) ||
+                  app.activeDocument.paragraphStyles.itemByName("ImagePlaceholderStyle");
+    if (ipStyle && ipStyle.isValid) {
+        targetRange.applyParagraphStyle(ipStyle, false);
+    }
+
+    if (typeof ParagraphDirectionOptions !== "undefined" && ParagraphDirectionOptions.RIGHT_TO_LEFT_DIRECTION) {
+        targetRange.paragraphs.everyItem().paragraphDirection =
+            ParagraphDirectionOptions.RIGHT_TO_LEFT_DIRECTION;
+    }
+    if (typeof Justification !== "undefined" && Justification.CENTER_ALIGN) {
+        targetRange.paragraphs.everyItem().justification =
+            Justification.CENTER_ALIGN;
+    }
+    targetRange.paragraphs.everyItem().leading = Leading.AUTO;
+    targetRange.paragraphs.everyItem().spaceBefore = IMAGE_SPACE_BEFORE_PT;
+    targetRange.paragraphs.everyItem().spaceAfter = IMAGE_SPACE_AFTER_PT;
+
+    return rect;
+}
+
+
 // ─── RTL Table Injection ──────────────────────────────────────────────
 
 /**

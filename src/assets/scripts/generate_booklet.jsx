@@ -478,6 +478,40 @@ function getFrameUsableWidth(frame) {
 }
 
 
+/**
+ * Compute usable height of a text frame in points.
+ *
+ * Implemented per STEP-7.7b: computes actual height from frame's geometricBounds
+ * (y1 - y0) minus its text frame inset spacings.
+ *
+ * @param {TextFrame} frame - The text frame to measure.
+ * @returns {number} Usable height in points.
+ */
+function getFrameUsableHeight(frame) {
+    var gb = frame.geometricBounds; // [y0, x0, y1, x1]
+    var frameHeight = gb[2] - gb[0];
+    var topInset = 0;
+    var bottomInset = 0;
+    if (frame.textFramePreferences) {
+        var insets = frame.textFramePreferences.insetSpacing;
+        if (typeof insets === "number") {
+            topInset = insets;
+            bottomInset = insets;
+        } else if (insets instanceof Array || (insets && typeof insets.length === "number")) {
+            if (insets.length === 4) {
+                topInset = insets[0];
+                bottomInset = insets[2];
+            } else if (insets.length === 1) {
+                topInset = insets[0];
+                bottomInset = insets[0];
+            }
+        }
+    }
+    var usable = frameHeight - topInset - bottomInset;
+    return (usable > 0) ? usable : frameHeight;
+}
+
+
 // ─── Main Generation Function ─────────────────────────────────────────
 
 function generateBookletMain() {
@@ -612,6 +646,8 @@ function generateBookletMain() {
             }
         }
 
+        var imagesPlacedCount = 0;
+
         for (var idx = 0; idx < items.length; idx++) {
             var item = items[idx];
             var isTable = (item.item_type === "table" || (!item.block_type && (item.headers || item.rows)));
@@ -623,6 +659,12 @@ function generateBookletMain() {
             } else if (item.block_type === "math_formula") {
                 // Math Formula Injection (strict LTR - SVG image or placeholder)
                 injectMathFormulaBlock(story, item, styles);
+            } else if (item.block_type === "image_prompt" && item.render_mode === "image") {
+                // Real Image Injection (STEP-7.7b)
+                var usableWidthPt = getFrameUsableWidth(currentFrame);
+                var usableHeightPt = getFrameUsableHeight(currentFrame);
+                injectImageBlock(story, item, styles, usableWidthPt, usableHeightPt);
+                imagesPlacedCount++;
             } else {
                 // Atomic insert-style-release for standard blocks
                 var blockText = item.raw_content || "";
@@ -799,6 +841,7 @@ function generateBookletMain() {
             greek_chars_styled: greekCharsStyled,
             greek_chars_expected: greekCharsExpected,
             greek_char_font: assignedFontName,
+            images_placed: imagesPlacedCount,
             output_indd: inddPath,
             output_pdf: pdfPath,
             pages: pageDiagnostics,
@@ -819,6 +862,7 @@ function generateBookletMain() {
             actual_page_count: (doc && doc.isValid) ? doc.pages.count() : 0,
             imposed_page_count: 0,
             composer_ok: false,
+            images_placed: imagesPlacedCount,
             warnings: warnings
         };
         if (resultPath) {
