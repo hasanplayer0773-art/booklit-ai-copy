@@ -94,7 +94,7 @@ class OpenRouterClient:
         """Classify content blocks via OpenRouter LLM with local fallback.
 
         Pre-classified blocks (math_formula, chemistry_formula,
-        legacy_equation_placeholder) are excluded from the LLM payload and
+        image_prompt, legacy_equation_placeholder) are excluded from the LLM payload and
         retain their classification unconditionally.
 
         If the eligible-block payload for this single document exceeds a token budget,
@@ -116,7 +116,9 @@ class OpenRouterClient:
         """
         eligible_blocks = [
             b for b in blocks
-            if b.block_type not in PRECLASSIFIED_TYPES and b.raw_content.strip()
+            if b.block_type not in PRECLASSIFIED_TYPES
+            and b.block_type not in ("image_prompt", "legacy_equation_placeholder")
+            and b.raw_content.strip()
         ]
 
         if not eligible_blocks or not self.api_key:

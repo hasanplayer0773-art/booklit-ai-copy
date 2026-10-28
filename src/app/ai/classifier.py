@@ -16,12 +16,14 @@ from typing import List
 from app.core.models import BlockType, ContentBlock
 
 # CROSS-STEP AMENDMENT: STEP-1.2 (AC-1.2.5) emits `legacy_equation_placeholder`
-# blocks. Like math/chemistry, they are assigned at extraction time and must
-# NEVER be re-classified by the rule engine nor sent to the LLM. This single
-# constant is the source of truth — do not hardcode the tuple elsewhere.
+# blocks; STEP-7.6 adds `image_prompt`. Like math/chemistry, they are assigned
+# at extraction time and must NEVER be re-classified by the rule engine nor sent
+# to the LLM. This single constant is the source of truth — do not hardcode the
+# tuple elsewhere.
 PRECLASSIFIED_TYPES: tuple[str, ...] = (
     "math_formula",
     "chemistry_formula",
+    "image_prompt",
     "legacy_equation_placeholder",
 )
 
@@ -34,7 +36,7 @@ class RuleBasedClassifier:
     patterns (e.g. علل, س وزاري, ما الفائدة).
 
     Pre-classified types (math_formula, chemistry_formula,
-    legacy_equation_placeholder) are strictly immutable — returned unchanged.
+    image_prompt, legacy_equation_placeholder) are strictly immutable — returned unchanged.
     """
 
     HEADER_PATTERN = re.compile(

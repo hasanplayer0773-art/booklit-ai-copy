@@ -117,6 +117,16 @@ def extract_document(
     return booklet_doc, source_counts, elapsed
 
 
+def _is_non_text_block(block: Any) -> bool:
+    """Determine whether a block represents non-text content for coverage audit."""
+    if block.block_type in ("image_prompt", "legacy_equation_placeholder", "math_formula"):
+        return True
+    sp = getattr(block, "source_position", None)
+    if isinstance(sp, dict) and sp.get("image_asset") is not None:
+        return True
+    return False
+
+
 def run_coverage_audit(
     docx_path: Union[str, Path],
     booklet_doc: BookletDocument,
@@ -169,7 +179,7 @@ def run_coverage_audit(
         b.raw_content
         for page in booklet_doc.pages
         for b in page.content_blocks
-        if b.block_type not in ("legacy_equation_placeholder", "image_asset", "math_formula")
+        if not _is_non_text_block(b)
     ]
     out_canonical_blocks = [canonical_normalize_text(b) for b in out_text_blocks]
 
@@ -208,7 +218,7 @@ def run_coverage_audit(
     out_items: List[str] = []
     for page in booklet_doc.pages:
         for b in page.content_blocks:
-            if b.block_type not in ("legacy_equation_placeholder", "image_asset", "math_formula"):
+            if not _is_non_text_block(b):
                 cb = canonical_normalize_text(b.raw_content)
                 if cb:
                     out_items.append(cb)
