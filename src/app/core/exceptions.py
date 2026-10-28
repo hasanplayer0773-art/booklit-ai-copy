@@ -162,3 +162,28 @@ class MathPlaceError(BookletError):
     """Raised when placing an SVG math formula image into InDesign fails (STEP-7.4)."""
 
 
+class ImageAssetMissingError(BookletError):
+    """Raised when an image asset referenced by a content block is missing on disk.
+
+    Plan STEP-7.7a forbids silent skipping or placeholder substitution for missing
+    image assets during payload construction.
+    """
+
+    def __init__(
+        self,
+        block_id_or_message: str = "",
+        path: str = "",
+        block_id: Optional[str] = None,
+        message: Optional[str] = None,
+    ) -> None:
+        if path:
+            self.block_id = block_id if block_id is not None else block_id_or_message
+            self.path = str(path)
+            msg = message or f"Image asset for block '{self.block_id}' missing on disk: {self.path}"
+        else:
+            self.block_id = block_id or ""
+            self.path = path
+            msg = message or block_id_or_message or "Image asset missing on disk"
+        super().__init__(msg)
+
+

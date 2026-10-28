@@ -18,20 +18,36 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+
+from pydantic import BaseModel
 
 from app.automation.com_supervisor import COMSupervisor
 from app.automation.geometry import PageGeometry
 from app.automation.job_protocol import COMJobRequest
 from app.automation.pagination_sync import BindingMethod, imposed_page_count
 from app.automation.styles_schema import TypographyStylesConfig
-from app.core.exceptions import TextIntegrityError
+from app.core.exceptions import ImageAssetMissingError, TextIntegrityError
 from app.core.math_renderer import extract_alt_text, render_mathml_to_svg
-from app.core.models import BookletDocument, ContentBlock
+from app.core.models import BookletDocument, ContentBlock, ImageAsset
 from app.core.text_integrity import verify_text_integrity
 
 logger = logging.getLogger(__name__)
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively convert Pydantic models, dicts, lists, and tuples into JSON-safe primitives."""
+    if isinstance(value, BaseModel):
+        return _json_safe(value.model_dump())
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, Path):
+        return str(value)
+    return value
 
 
 def build_payload(
@@ -99,6 +115,10 @@ def build_payload(
     math_rendered_count = 0
     math_failed_count = 0
 
+    images_dir = out_path / "images"
+    image_found_count = 0
+    image_copied_count = 0
+
     for page in document.pages:
         p_blocks: List[Dict[str, Any]] = []
         for b in page.content_blocks:
@@ -108,7 +128,7 @@ def build_payload(
                 "raw_content": b.raw_content,
                 "content_hash": b.content_hash,
                 "user_edited": b.user_edited,
-                "source_position": b.source_position,
+                "source_position": _json_safe(b.source_position),
             }
 
             if b.block_type == "math_formula":
@@ -132,6 +152,59 @@ def build_payload(
                     if fail_warning not in document.warnings:
                         document.warnings.append(fail_warning)
                     math_failed_count += 1
+
+            sp = b.source_position if isinstance(b.source_position, dict) else {}
+            asset = sp.get("image_asset")
+            is_image_block = b.block_type == "image_prompt" or asset is not None
+
+            if is_image_block:
+                image_found_count += 1
+                if asset is not None:
+                    if isinstance(asset, ImageAsset):
+                        src_path_str = asset.source_path
+                        pixel_width = asset.pixel_width
+                        pixel_height = asset.pixel_height
+                        intended_width_mm = asset.intended_width_mm
+                        intended_height_mm = asset.intended_height_mm
+                    elif isinstance(asset, dict):
+                        src_path_str = asset.get("source_path")
+                        pixel_width = asset.get("pixel_width")
+                        pixel_height = asset.get("pixel_height")
+                        intended_width_mm = asset.get("intended_width_mm")
+                        intended_height_mm = asset.get("intended_height_mm")
+                    else:
+                        src_path_str = getattr(asset, "source_path", None)
+                        pixel_width = getattr(asset, "pixel_width", None)
+                        pixel_height = getattr(asset, "pixel_height", None)
+                        intended_width_mm = getattr(asset, "intended_width_mm", None)
+                        intended_height_mm = getattr(asset, "intended_height_mm", None)
+                else:
+                    src_path_str = sp.get("source_path")
+                    pixel_width = None
+                    pixel_height = None
+                    intended_width_mm = None
+                    intended_height_mm = None
+
+                src_file = Path(src_path_str) if src_path_str else None
+                if src_file is None or not src_file.is_file():
+                    raise ImageAssetMissingError(
+                        block_id=b.block_id,
+                        path=str(src_path_str or ""),
+                    )
+
+                images_dir.mkdir(parents=True, exist_ok=True)
+                ext = src_file.suffix
+                dest_file = (images_dir / f"{b.block_id}{ext}").resolve()
+                shutil.copy2(src_file, dest_file)
+                image_copied_count += 1
+
+                b_dict["render_mode"] = "image"
+                b_dict["image_path"] = str(dest_file)
+                b_dict["pixel_width"] = pixel_width
+                b_dict["pixel_height"] = pixel_height
+                b_dict["intended_width_mm"] = intended_width_mm
+                b_dict["intended_height_mm"] = intended_height_mm
+                b_dict["alt_text"] = "image"
 
             blocks_list.append(b_dict)
             p_blocks.append(b_dict)
@@ -269,6 +342,10 @@ def build_payload(
             "rendered": math_rendered_count,
             "failed": math_failed_count,
             "total": math_rendered_count + math_failed_count,
+        },
+        "image_stats": {
+            "found": image_found_count,
+            "copied": image_copied_count,
         },
         "warnings": list(document.warnings),
         "blocks": blocks_list,

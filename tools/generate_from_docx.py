@@ -423,6 +423,7 @@ def build_report(
     pipeline_warnings: Optional[List[str]] = None,
     output_files: Optional[Dict[str, str]] = None,
     math_stats: Optional[Dict[str, int]] = None,
+    image_stats: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """Construct structured report dictionary adhering to STEP-7.2 specification.
 
@@ -481,6 +482,10 @@ def build_report(
         "math_rendered_count": (math_stats or {}).get("rendered", 0),
         "math_failed_count": (math_stats or {}).get("failed", 0),
         "first_3_math_formulas": first_3_math,
+        "image_stats": {
+            "found": (image_stats or {}).get("found", 0),
+            "copied": (image_stats or {}).get("copied", 0),
+        },
         "actual_page_count": actual_page_count,
         "imposed_page_count": imposed_page_count,
         "final_page_count": final_page_count,
@@ -538,9 +543,17 @@ def format_report_text(report: Dict[str, Any]) -> str:
     else:
         lines.append("  * First Math Formulas: (none)")
 
+    img_stats = report.get("image_stats", {})
     lines.extend([
         "",
-        "── 4. Layout & Page Imposition ───────────────────────────────────────",
+        "── 4. Images Diagnostics ─────────────────────────────────────────────",
+        f"  * Images Found:                 {img_stats.get('found', 0)}",
+        f"  * Images Copied:                {img_stats.get('copied', 0)}",
+    ])
+
+    lines.extend([
+        "",
+        "── 5. Layout & Page Imposition ───────────────────────────────────────",
         f"  * Actual Content Pages:  {report.get('actual_page_count')}",
         f"  * Imposed Target Pages:  {report.get('imposed_page_count')}",
         f"  * Final Document Pages:  {report.get('final_page_count')}",
@@ -558,7 +571,7 @@ def format_report_text(report: Dict[str, Any]) -> str:
 
     lines.extend([
         "",
-        "── 5. Timing per Stage ───────────────────────────────────────────────",
+        "── 6. Timing per Stage ───────────────────────────────────────────────",
     ])
     for stage, sec in report.get("timings", {}).items():
         lines.append(f"  * {stage:<30}: {sec:.3f}s")
@@ -566,7 +579,7 @@ def format_report_text(report: Dict[str, Any]) -> str:
     warnings = report.get("warnings", [])
     lines.extend([
         "",
-        f"── 6. Warnings ({len(warnings)}) ──────────────────────────────────────────────",
+        f"── 7. Warnings ({len(warnings)}) ──────────────────────────────────────────────",
     ])
     if warnings:
         for w in warnings:
@@ -578,7 +591,7 @@ def format_report_text(report: Dict[str, Any]) -> str:
     if outputs:
         lines.extend([
             "",
-            "── 7. Output Artifacts ───────────────────────────────────────────────",
+            "── 8. Output Artifacts ───────────────────────────────────────────────",
         ])
         for k, path in outputs.items():
             lines.append(f"  * {k:<15}: {path}")
@@ -679,6 +692,7 @@ def run_pipeline(
         with open(payload_path, "r", encoding="utf-8") as f:
             payload_json = json.load(f)
         math_stats = payload_json.get("math_stats", {})
+        image_stats = payload_json.get("image_stats", {})
         if math_stats.get("rendered", 0) > 0 and math_stats.get("failed", 0) == 0:
             pipeline_warnings = [w for w in pipeline_warnings if w != "MATHML_NOT_RENDERABLE"]
         for w in booklet_doc.warnings:
@@ -737,6 +751,7 @@ def run_pipeline(
             pipeline_warnings=pipeline_warnings,
             output_files=output_files,
             math_stats=math_stats,
+            image_stats=image_stats,
         )
 
         with open(report_file, "w", encoding="utf-8") as f:
